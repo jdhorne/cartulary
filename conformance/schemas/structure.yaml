@@ -1,0 +1,51 @@
+# structure.yaml — conformance schema for structural features
+#
+# Single-schema (no `schemas:` key). Exercises section ordering, deprecated
+# and unknown sections, subsections, typed tables, labeled reference lists,
+# logs, enums, and the optional "~" title allowance. Only `Body` is required,
+# so a case can include just the section it is testing.
+
+title_pattern: "Record {code}"
+primary_key: id
+additional_sections: false
+
+value_types:
+  slug: { pattern: "^[a-z0-9]+(-[a-z0-9]+)*$" }
+  rank: { enum: [low, medium, high] }
+  iso_date: { pattern: "^\\d{4}-\\d{2}-\\d{2}$" }
+
+frontmatter:
+  fields:
+    id: { type: slug, required: true, primary_key: true }
+    code: { required: true }
+    rank: { type: rank }
+
+sections:
+  - heading: Body
+    required: true
+    content: { type: prose }
+  - heading: Sub
+    subsections:
+      - heading: Alpha
+        required: true
+      - heading: Beta
+        required: true
+  - heading: Records
+    content:
+      type: table
+      min_rows: 2
+      columns:
+        When: { type: iso_date }
+        Level: { enum: [a, b, c] }
+  - heading: Links
+    content:
+      type: ref_list
+      style: labeled
+      items:
+        - label: Owner
+  - heading: Log
+    content:
+      type: log
+      entry_pattern: "^\\d{4}-\\d{2}-\\d{2}: .+"
+  - heading: Old
+    deprecated: true

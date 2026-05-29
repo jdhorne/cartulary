@@ -1,0 +1,42 @@
+# note.schema.yaml — minimal single-schema example
+#
+# A single-schema file has NO top-level `schemas:` key; the whole file
+# IS the schema. Use this shape when a corpus holds one kind of document.
+# This example also shows list-valued frontmatter fields via `items:`.
+
+title_pattern: "{title}"
+primary_key: note_id
+filename_must_match: note_id
+additional_sections: warn      # unknown sections warn rather than error
+
+value_types:
+  slug:
+    pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+    examples: ["meeting-notes"]
+  priority:
+    enum: ["low", "medium", "high"]
+
+frontmatter:
+  fields:
+    note_id: { type: slug, required: true, primary_key: true }
+    title: { required: true }
+    priority: { type: priority }
+    # A plain list field: every item is validated against `items`.
+    tags:
+      items:
+        type: slug
+    # A heterogeneous list: each item matches the first `any_of` option
+    # that fits — either a bare slug or an object with label + url.
+    links:
+      items:
+        any_of:
+          - { type: slug }
+          - type: object
+            fields:
+              label: { required: true }
+              url: { required: true }
+
+sections:
+  - heading: Body
+    required: true
+    content: { type: prose }

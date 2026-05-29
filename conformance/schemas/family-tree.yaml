@@ -1,0 +1,112 @@
+# family-tree.schema.yaml — example multi-schema for cartulary
+#
+# The example that started it all: a family tree. Every person is one
+# Markdown file; people reference each other as parents, spouses, and
+# children, and each link must reciprocate — if A lists B as a parent,
+# B must list A as a child. That bidirectional integrity is exactly what
+# cartulary is built to enforce, and a genealogy is its purest form.
+#
+# Two document types share one key namespace: `person` and `source` (the
+# documents that attest a person). The sample corpus in `family-tree/`
+# uses fictional hobbits from Tolkien's legendarium — no real people.
+#
+# Run it:
+#   cartulary examples/family-tree.schema.yaml examples/family-tree/*.md
+
+value_types:
+  person_id:
+    description: "Person identifier: kebab slug"
+    pattern: "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    examples: ["bilbo-baggins"]
+
+  source_id:
+    description: "Source-document identifier: kebab slug"
+    pattern: "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    examples: ["red-book"]
+
+  shire_year:
+    description: "Shire Reckoning year, optionally approximate (~)"
+    pattern: "^(S\\.R\\. )?~?\\d{3,4}$"
+    examples: ["S.R. 1290", "~1320"]
+
+  date_or_unknown:
+    description: "A Shire-Reckoning year, or the literal Unknown"
+    any_of:
+      - literal: "Unknown"
+      - type: shire_year
+
+  source_kind:
+    enum: [chronicle, genealogy, letter, map]
+
+  edit_date:
+    description: "Real-world date a record was edited (ISO)"
+    pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+
+schemas:
+  # ─── document_type: person ─────────────────────────────────
+  person:
+    primary_key: person_id
+    filename_must_match: person_id
+    title_pattern: "{name}"
+    additional_sections: false
+    frontmatter:
+      fields:
+        document_type: { value: person, required: true }
+        person_id: { type: person_id, required: true }
+        name: { required: true }
+        birth: { type: date_or_unknown, required: true }
+        death: { type: date_or_unknown }
+    sections:
+      - heading: Life
+        required: true
+        content: { type: prose }
+      - heading: Parents
+        content:
+          type: ref_list
+          style: unlabeled
+          ref: person_id
+          inverse: Children      # a parent listed here must list me as a child
+      - heading: Spouse
+        content:
+          type: ref_list
+          style: unlabeled
+          ref: person_id
+          inverse: Spouse        # marriage is mutual — the spouse must list me back
+      - heading: Children
+        content:
+          type: ref_list
+          style: unlabeled
+          ref: person_id
+          inverse: Parents       # a child listed here must list me as a parent
+      - heading: Documented In
+        content:
+          type: ref_list
+          style: unlabeled
+          ref: source_id         # points into the `source` document type
+      - heading: Change Log
+        position: last
+        content:
+          type: log
+          entry_pattern: "^\\d{4}-\\d{2}-\\d{2}: .+"
+
+  # ─── document_type: source ─────────────────────────────────
+  source:
+    primary_key: source_id
+    filename_must_match: source_id
+    title_pattern: "{title}"
+    additional_sections: false
+    frontmatter:
+      fields:
+        document_type: { value: source, required: true }
+        source_id: { type: source_id, required: true }
+        title: { required: true }
+        kind: { type: source_kind, required: true }
+    sections:
+      - heading: Summary
+        required: true
+        content: { type: prose }
+      - heading: Change Log
+        position: last
+        content:
+          type: log
+          entry_pattern: "^\\d{4}-\\d{2}-\\d{2}: .+"

@@ -1,0 +1,117 @@
+# library.schema.yaml — example multi-schema for cartulary
+#
+# Two document types — `book` and `author` — that cross-reference each
+# other. This is the feature that sets cartulary apart from frontmatter
+# validators: corpus-level referential integrity. A book's "Written By"
+# list points at author files; each author's "Books" list must point
+# back. The validator checks that every reference resolves AND that the
+# reciprocal (inverse) reference exists on the other side.
+#
+# Each file declares its kind via `document_type` in frontmatter; the
+# validator routes it to the matching sub-schema. Primary keys from all
+# sub-schemas share one namespace, so refs resolve across types.
+
+# ─── Shared value types (available to every sub-schema) ──────
+value_types:
+  year:
+    description: "Four-digit year"
+    pattern: "^\\d{4}$"
+    examples: ["1937", "2026"]
+
+  isbn:
+    description: "ISBN-10 or ISBN-13 (groups separated by hyphens)"
+    pattern: "^(97[89]-)?\\d-\\d{3}-\\d{5}-\\d$"
+    examples: ["0-306-40615-2", "978-0-306-40615-7"]
+
+  book_id_format:
+    description: "Book identifier: kebab slug ending in -YYYY"
+    pattern: "^[a-z][a-z0-9]*(-[a-z0-9]+)*-\\d{4}$"
+    examples: ["the-hobbit-1937"]
+
+  author_id_format:
+    description: "Author identifier: kebab slug"
+    pattern: "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+    examples: ["jrr-tolkien"]
+
+  status:
+    description: "Whether the title is currently available"
+    enum: ["in-print", "out-of-print", "upcoming"]
+
+  cover_image:
+    description: "Path to a cover image, relative to the file"
+    pattern: "^covers/[\\w./-]+$"
+    exists:
+      relative_to: "."
+      severity: warning
+
+schemas:
+  # ─── document_type: book ───────────────────────────────────
+  book:
+    # Document-level primary-key form (points at a frontmatter field).
+    primary_key: book_id
+    filename_must_match: book_id
+    title_pattern: "{title} ({year})"
+    additional_sections: false
+    frontmatter:
+      fields:
+        document_type: { value: book, required: true }
+        book_id: { type: book_id_format, required: true }
+        title: { required: true }
+        year: { type: year, required: true }
+        isbn: { type: isbn }
+        status: { type: status, required: true }
+        cover: { type: cover_image }
+    sections:
+      - heading: Summary
+        required: true
+        content: { type: prose }
+      - heading: Editions
+        content:
+          type: table
+          min_rows: 1
+          columns:
+            Year: { type: year }
+            Format: { enum: [hardcover, paperback, ebook, audiobook] }
+            ISBN: { type: isbn, nullable: true }
+      - heading: Written By
+        required: true
+        content:
+          type: ref_list
+          style: unlabeled
+          ref: author_id      # resolves against the author primary key
+          min_items: 1
+          inverse: Books       # each referenced author must list this book
+      - heading: Change Log
+        position: last
+        content:
+          type: log
+          entry_pattern: "^\\d{4}-\\d{2}-\\d{2}: .+"
+
+  # ─── document_type: author ─────────────────────────────────
+  author:
+    filename_must_match: author_id
+    title_pattern: "{name}"
+    additional_sections: false
+    frontmatter:
+      fields:
+        document_type: { value: author, required: true }
+        # Field-level primary-key form (equivalent to the document-level
+        # `primary_key:` used by `book` above).
+        author_id: { type: author_id_format, required: true, primary_key: true }
+        name: { required: true }
+        born: { type: year }
+    sections:
+      - heading: Bio
+        required: true
+        content: { type: prose }
+      - heading: Books
+        content:
+          type: ref_list
+          style: unlabeled
+          ref: book_id          # resolves against the book primary key
+          inverse: Written By    # each referenced book must list this author
+      - heading: Change Log
+        position: last
+        content:
+          type: log
+          entry_pattern: "^\\d{4}-\\d{2}-\\d{2}: .+"

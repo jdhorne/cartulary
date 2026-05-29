@@ -1,0 +1,138 @@
+- name: required-field-missing
+  description: A required frontmatter field that is absent is reported.
+  schema: family-tree.yaml
+  documents:
+    - path: nobirth.md
+      content: |
+        ---
+        document_type: person
+        person_id: nobirth
+        name: No Birth
+        ---
+
+        # No Birth
+
+        ## Life
+
+        Missing the required `birth` field.
+  expect:
+    - file: nobirth.md
+      path: "frontmatter.birth"
+      severity: error
+
+- name: type-pattern-rejected
+  description: A field value that does not match its value_type pattern is reported.
+  schema: family-tree.yaml
+  documents:
+    - path: badbirth.md
+      content: |
+        ---
+        document_type: person
+        person_id: badbirth
+        name: Bad Birth
+        birth: sometime soon
+        ---
+
+        # Bad Birth
+
+        ## Life
+
+        Birth is not a Shire-Reckoning year.
+  expect:
+    - file: badbirth.md
+      path: "frontmatter.birth"
+      severity: error
+
+- name: enum-rejected
+  description: A field value outside its enum is reported.
+  schema: structure.yaml
+  documents:
+    - path: rec-1.md
+      content: |
+        ---
+        id: rec-1
+        code: "1"
+        rank: extreme
+        ---
+
+        # Record 1
+
+        ## Body
+
+        Rank is not one of the allowed values.
+  expect:
+    - file: rec-1.md
+      path: "frontmatter.rank"
+      severity: error
+
+- name: list-field-item-type-checked
+  description: Every element of a list-valued field is validated against `items`.
+  schema: note.yaml
+  documents:
+    - path: standup-notes.md
+      content: |
+        ---
+        note_id: standup-notes
+        title: Standup Notes
+        tags:
+          - Not A Slug!
+        ---
+
+        # Standup Notes
+
+        ## Body
+
+        A tag that is not a valid slug.
+  expect:
+    - file: standup-notes.md
+      path: "frontmatter.tags[0]"
+      severity: error
+
+- name: list-field-any-of-no-option-matches
+  description: A list item that matches no any_of option (object missing a required field) is reported.
+  schema: note.yaml
+  documents:
+    - path: links-note.md
+      content: |
+        ---
+        note_id: links-note
+        title: Links Note
+        links:
+          - label: Board
+        ---
+
+        # Links Note
+
+        ## Body
+
+        A link object missing its required `url`.
+  expect:
+    - file: links-note.md
+      path: "frontmatter.links[0]"
+      severity: error
+
+- name: valid-note
+  description: A well-formed single-schema note with list fields produces no findings.
+  schema: note.yaml
+  documents:
+    - path: good-note.md
+      content: |
+        ---
+        note_id: good-note
+        title: Good Note
+        priority: high
+        tags:
+          - meeting
+          - team
+        links:
+          - some-related-note
+          - label: Board
+            url: https://example.test/board
+        ---
+
+        # Good Note
+
+        ## Body
+
+        Everything in order.
+  expect: []

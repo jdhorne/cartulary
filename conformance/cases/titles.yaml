@@ -1,0 +1,40 @@
+- name: title-pattern-mismatch
+  description: An H1 that does not match the title_pattern is reported.
+  schema: family-tree.yaml
+  documents:
+    - path: mistitled.md
+      content: |
+        ---
+        document_type: person
+        person_id: mistitled
+        name: Real Name
+        birth: S.R. 1300
+        ---
+
+        # Wrong Title
+
+        ## Life
+
+        H1 does not equal the `name` field.
+  expect:
+    - file: mistitled.md
+      path: "title"
+      severity: error
+
+- name: circa-marker-allowed-in-title
+  description: An optional "~" before a substituted title value is permitted.
+  schema: structure.yaml
+  documents:
+    - path: rec-7.md
+      content: |
+        ---
+        id: rec-7
+        code: "7"
+        ---
+
+        # Record ~7
+
+        ## Body
+
+        The "~" before the code is allowed.
+  expect: []

@@ -1,0 +1,134 @@
+- name: required-section-missing
+  description: A required section that is absent is reported.
+  schema: family-tree.yaml
+  documents:
+    - path: nolife.md
+      content: |
+        ---
+        document_type: person
+        person_id: nolife
+        name: No Life
+        birth: S.R. 1300
+        ---
+
+        # No Life
+  expect:
+    - file: nolife.md
+      path: "sections"
+      severity: error
+      message_contains: "Life"
+
+- name: section-order
+  description: Known sections must appear in the schema's declared order.
+  schema: family-tree.yaml
+  documents:
+    - path: misordered.md
+      content: |
+        ---
+        document_type: person
+        person_id: misordered
+        name: Misordered
+        birth: S.R. 1300
+        ---
+
+        # Misordered
+
+        ## Life
+
+        Children appears before Parents.
+
+        ## Children
+
+        - Unknown
+
+        ## Parents
+
+        - Unknown
+  expect:
+    - file: misordered.md
+      path: "sections"
+      severity: error
+      message_contains: "order"
+
+- name: deprecated-section-warns
+  description: A section marked deprecated produces a warning when present.
+  schema: structure.yaml
+  documents:
+    - path: rec-2.md
+      content: |
+        ---
+        id: rec-2
+        code: "2"
+        ---
+
+        # Record 2
+
+        ## Body
+
+        Has a deprecated section.
+
+        ## Old
+
+        Legacy content.
+  expect:
+    - file: rec-2.md
+      path: "section[Old]"
+      severity: warning
+
+- name: unknown-section-error
+  description: With additional_sections false, an unrecognised section is an error.
+  schema: structure.yaml
+  documents:
+    - path: rec-3.md
+      content: |
+        ---
+        id: rec-3
+        code: "3"
+        ---
+
+        # Record 3
+
+        ## Body
+
+        Has a section the schema does not declare.
+
+        ## Bogus
+
+        Unexpected.
+  expect:
+    - file: rec-3.md
+      path: "sections"
+      severity: error
+      message_contains: "Unknown section"
+
+- name: subsection-order
+  description: Subsections must appear in their declared order.
+  schema: structure.yaml
+  documents:
+    - path: rec-4.md
+      content: |
+        ---
+        id: rec-4
+        code: "4"
+        ---
+
+        # Record 4
+
+        ## Body
+
+        Subsections are out of order.
+
+        ## Sub
+
+        ### Beta
+
+        Second, listed first.
+
+        ### Alpha
+
+        First, listed second.
+  expect:
+    - file: rec-4.md
+      path: "section[Sub]"
+      severity: error
+      message_contains: "order"

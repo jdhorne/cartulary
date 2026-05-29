@@ -1,0 +1,81 @@
+- name: malformed-yaml-frontmatter
+  description: Frontmatter that is not valid YAML is reported as such, not treated as empty.
+  schema: structure.yaml
+  documents:
+    - path: broken.md
+      content: |
+        ---
+        id: [1, 2
+        ---
+
+        # Record 1
+
+        ## Body
+
+        The frontmatter is not valid YAML.
+  expect:
+    - file: broken.md
+      path: "frontmatter"
+      severity: error
+      message_contains: "Invalid YAML frontmatter"
+
+- name: duplicate-primary-key
+  description: The same primary key in two documents is reported on both.
+  schema: structure.yaml
+  documents:
+    - path: dup-a.md
+      content: |
+        ---
+        id: shared
+        code: "1"
+        ---
+
+        # Record 1
+
+        ## Body
+
+        First document with the shared id.
+    - path: dup-b.md
+      content: |
+        ---
+        id: shared
+        code: "1"
+        ---
+
+        # Record 1
+
+        ## Body
+
+        Second document with the shared id.
+  expect:
+    - file: dup-a.md
+      path: "frontmatter.id"
+      severity: error
+      message_contains: "Duplicate primary key"
+    - file: dup-b.md
+      path: "frontmatter.id"
+      severity: error
+      message_contains: "Duplicate primary key"
+
+- name: filename-must-match
+  description: When filename_must_match is set, the file stem must equal the field value.
+  schema: family-tree.yaml
+  documents:
+    - path: wrong-name.md
+      content: |
+        ---
+        document_type: person
+        person_id: right-name
+        name: Right Name
+        birth: S.R. 1300
+        ---
+
+        # Right Name
+
+        ## Life
+
+        The file is named wrong-name.md but person_id is right-name.
+  expect:
+    - file: wrong-name.md
+      path: "filename"
+      severity: error

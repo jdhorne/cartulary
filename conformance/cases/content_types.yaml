@@ -1,0 +1,84 @@
+- name: table-typed-cells-and-min-rows
+  description: Table cells are validated by column type/enum, and min_rows is enforced.
+  schema: structure.yaml
+  documents:
+    - path: rec-5.md
+      content: |
+        ---
+        id: rec-5
+        code: "5"
+        ---
+
+        # Record 5
+
+        ## Body
+
+        One row, with a bad date and a bad level, below min_rows.
+
+        ## Records
+
+        | When | Level |
+        |------|-------|
+        | 2020 | z |
+  expect:
+    - file: rec-5.md
+      path: "section[Records]"
+      severity: error
+      message_contains: "at least 2"
+    - file: rec-5.md
+      path: "section[Records].row[0].When"
+      severity: error
+    - file: rec-5.md
+      path: "section[Records].row[0].Level"
+      severity: error
+
+- name: labeled-ref-list-missing-item
+  description: A labeled reference list missing a required label is reported.
+  schema: structure.yaml
+  documents:
+    - path: rec-6.md
+      content: |
+        ---
+        id: rec-6
+        code: "6"
+        ---
+
+        # Record 6
+
+        ## Body
+
+        The Links list lacks the required Owner item.
+
+        ## Links
+
+        - Someone unrelated
+  expect:
+    - file: rec-6.md
+      path: "section[Links].Owner"
+      severity: error
+      message_contains: "Owner"
+
+- name: log-entry-pattern
+  description: Each log entry must match the entry_pattern.
+  schema: structure.yaml
+  documents:
+    - path: rec-7.md
+      content: |
+        ---
+        id: rec-7
+        code: "7"
+        ---
+
+        # Record 7
+
+        ## Body
+
+        A log entry that is not a dated line.
+
+        ## Log
+
+        - not a dated entry
+  expect:
+    - file: rec-7.md
+      path: "section[Log].entry[0]"
+      severity: error

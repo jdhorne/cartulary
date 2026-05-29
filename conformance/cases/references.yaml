@@ -1,0 +1,182 @@
+- name: valid-corpus-reciprocates
+  description: A book and its author that reference each other both ways produce no findings.
+  schema: library.yaml
+  documents:
+    - path: the-hobbit-1937.md
+      content: |
+        ---
+        document_type: book
+        book_id: the-hobbit-1937
+        title: The Hobbit
+        year: "1937"
+        status: in-print
+        ---
+
+        # The Hobbit (1937)
+
+        ## Summary
+
+        A hobbit goes there and back again.
+
+        ## Written By
+
+        - J.R.R. Tolkien → `jrr-tolkien`
+
+        ## Change Log
+
+        - 2026-01-12: Catalogued.
+    - path: jrr-tolkien.md
+      content: |
+        ---
+        document_type: author
+        author_id: jrr-tolkien
+        name: J.R.R. Tolkien
+        ---
+
+        # J.R.R. Tolkien
+
+        ## Bio
+
+        English writer and philologist.
+
+        ## Books
+
+        - The Hobbit → `the-hobbit-1937`
+
+        ## Change Log
+
+        - 2026-01-12: Created.
+  expect: []
+
+- name: unresolved-reference
+  description: A reference to an id that exists in no document is reported.
+  schema: library.yaml
+  documents:
+    - path: lonely-2020.md
+      content: |
+        ---
+        document_type: book
+        book_id: lonely-2020
+        title: Lonely
+        year: "2020"
+        status: in-print
+        ---
+
+        # Lonely (2020)
+
+        ## Summary
+
+        References an author that does not exist.
+
+        ## Written By
+
+        - Nobody → `ghost-author`
+
+        ## Change Log
+
+        - 2026-01-12: Catalogued.
+  expect:
+    - file: lonely-2020.md
+      path: "section[Written By].item"
+      severity: error
+      message_contains: "Unresolved reference"
+
+- name: reference-resolves-to-wrong-document-type
+  description: A ref must point at the document type that owns the PK field; resolving to another type is an error.
+  schema: family-tree.yaml
+  documents:
+    - path: alice.md
+      content: |
+        ---
+        document_type: person
+        person_id: alice
+        name: Alice
+        birth: S.R. 1300
+        ---
+
+        # Alice
+
+        ## Life
+
+        Lists a person where a source is expected.
+
+        ## Documented In
+
+        - Bob → `bob`
+    - path: bob.md
+      content: |
+        ---
+        document_type: person
+        person_id: bob
+        name: Bob
+        birth: S.R. 1305
+        ---
+
+        # Bob
+
+        ## Life
+
+        An ordinary person.
+  expect:
+    - file: alice.md
+      path: "section[Documented In].item"
+      severity: error
+      message_contains: "resolves to a 'person'"
+
+- name: missing-reciprocal-reference
+  description: If a child lists a parent, the parent must list the child back; the missing half is a warning.
+  schema: family-tree.yaml
+  documents:
+    - path: kid.md
+      content: |
+        ---
+        document_type: person
+        person_id: kid
+        name: Kid
+        birth: S.R. 1360
+        ---
+
+        # Kid
+
+        ## Life
+
+        Lists a parent who does not list them back.
+
+        ## Parents
+
+        - Mom → `mom`
+    - path: mom.md
+      content: |
+        ---
+        document_type: person
+        person_id: mom
+        name: Mom
+        birth: S.R. 1330
+        ---
+
+        # Mom
+
+        ## Life
+
+        Does not list Kid under Children.
+  expect:
+    - file: mom.md
+      path: "section[Children]"
+      severity: warning
+      message_contains: "reciprocal"
+
+- name: unknown-document-type
+  description: In a multi-schema file, a document_type with no matching schema is reported.
+  schema: library.yaml
+  documents:
+    - path: weird.md
+      content: |
+        ---
+        document_type: magazine
+        ---
+
+        # Weird
+  expect:
+    - file: weird.md
+      path: "frontmatter.document_type"
+      severity: error
