@@ -38,6 +38,7 @@ A schema is a YAML file. It comes in two shapes:
 | `filename_must_match` | per schema | Name of a frontmatter field whose value must equal the file's stem (filename without extension). |
 | `additional_sections` | per schema | `false` (default) errors on unknown sections; `"warn"` warns; `true` allows them. |
 | `additional_subsections` | per schema | Document-level default for unknown subsections; overridable per section. |
+| `conventions` | both | Overrides the reference micro-syntax (arrow, "no reference" literals). In multi-schema files, declared once at the top and shared (see [Conventions](#conventions)). |
 
 ---
 
@@ -248,7 +249,9 @@ List-item syntax the parser understands:
 ```
 
 The cross-reference is the back-ticked id after a `→` arrow. The literals
-`Unknown` / `None known` are treated as "no reference present".
+`Unknown` / `None known` are treated as "no reference present". Both the arrow
+and the set of "no reference" literals are configurable — see
+[Conventions](#conventions).
 
 ### `log`
 
@@ -288,6 +291,46 @@ This is what distinguishes cartulary from frontmatter/structure validators:
 Single-file validation (`validate_file`) skips resolution and reciprocity
 (there is no corpus to resolve against) but still does format-validation and
 all structural checks.
+
+---
+
+## Conventions
+
+The micro-syntax cartulary reads in reference lists is not hard-wired; a
+top-level `conventions` block overrides it (in a multi-schema file, declare it
+once at the top and it is shared by every sub-schema):
+
+```yaml
+conventions:
+  reference_arrow: "→"                  # marker before a back-ticked `id`
+  unknown_literals: ["Unknown", "None known"]   # entries meaning "no reference"
+```
+
+- `reference_arrow` — the token that introduces a cross-reference
+  (`Name <arrow> \`id\``). Default `→`.
+- `unknown_literals` — list-item texts treated as "no reference present" (so
+  they don't count toward `min_items` and aren't resolved). Default
+  `["Unknown", "unknown", "None known"]`.
+
+This keeps the format usable outside the default English/arrow conventions, and
+means a conforming implementation reads these from the schema rather than
+hard-coding them.
+
+---
+
+## Validating the schema itself
+
+A schema can be checked *before* it is used, which catches the mistakes a
+document validator would otherwise pass over silently:
+
+- **Errors:** a `type:` naming an undefined value_type, an unknown content
+  `type`, and `primary_key` / `filename_must_match` naming a field that does
+  not exist.
+- **Warnings:** misspelled or unrecognized keys (e.g. `requried:` instead of
+  `required:`) at any level.
+
+The reference CLI runs this first and refuses to proceed (exit code 2) if the
+schema has errors.
 
 ---
 

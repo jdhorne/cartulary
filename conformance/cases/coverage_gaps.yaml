@@ -1,0 +1,316 @@
+- name: exists-missing-file-warns
+  description: A value typed with an `exists` check warns when the referenced file is absent.
+  schema: library.yaml
+  documents:
+    - path: the-hobbit-1937.md
+      content: |
+        ---
+        document_type: book
+        book_id: the-hobbit-1937
+        title: The Hobbit
+        year: "1937"
+        status: in-print
+        cover: covers/nope.txt
+        ---
+
+        # The Hobbit (1937)
+
+        ## Summary
+
+        The cover file does not exist on disk.
+
+        ## Written By
+
+        - J.R.R. Tolkien → `jrr-tolkien`
+
+        ## Change Log
+
+        - 2026-01-12: Catalogued.
+    - path: jrr-tolkien.md
+      content: |
+        ---
+        document_type: author
+        author_id: jrr-tolkien
+        name: J.R.R. Tolkien
+        ---
+
+        # J.R.R. Tolkien
+
+        ## Bio
+
+        English writer.
+
+        ## Books
+
+        - The Hobbit → `the-hobbit-1937`
+
+        ## Change Log
+
+        - 2026-01-12: Created.
+  expect:
+    - file: the-hobbit-1937.md
+      path: "frontmatter.cover"
+      severity: warning
+
+- name: position-last-violation
+  description: A section declared position=last must be the final section.
+  schema: family-tree.yaml
+  documents:
+    - path: outoforder.md
+      content: |
+        ---
+        document_type: person
+        person_id: outoforder
+        name: Out Of Order
+        birth: S.R. 1300
+        ---
+
+        # Out Of Order
+
+        ## Life
+
+        Change Log is not last.
+
+        ## Change Log
+
+        - 2026-01-12: Created.
+
+        ## Documented In
+
+        - Unknown
+  expect:
+    - file: outoforder.md
+      path: "sections"
+      severity: error
+    - file: outoforder.md
+      path: "section[Change Log]"
+      severity: error
+      message_contains: "last"
+
+- name: frontmatter-level-reference-unresolved
+  description: A `ref` on a frontmatter field resolves across the corpus like any other.
+  schema: structure.yaml
+  documents:
+    - path: rec-fm.md
+      content: |
+        ---
+        id: rec-fm
+        code: "1"
+        owner: ghostid
+        ---
+
+        # Record 1
+
+        ## Body
+
+        owner points at an id that exists nowhere.
+  expect:
+    - file: rec-fm.md
+      path: "frontmatter.owner"
+      severity: error
+      message_contains: "Unresolved"
+
+- name: nullable-warn-column
+  description: A column with nullable=warn produces a warning (not an error) on an empty cell.
+  schema: warn.yaml
+  documents:
+    - path: w1.md
+      content: |
+        ---
+        id: w1
+        ---
+
+        # w1
+
+        ## Main
+
+        Has an empty nullable=warn cell.
+
+        ## Extra
+
+        Present so it does not also warn.
+
+        ## Grid
+
+        | A | B |
+        |---|---|
+        | x |   |
+  expect:
+    - file: w1.md
+      path: "section[Grid].row[0].B"
+      severity: warning
+
+- name: required-section-warn
+  description: A section with required=warn produces a warning (not an error) when missing.
+  schema: warn.yaml
+  documents:
+    - path: w2.md
+      content: |
+        ---
+        id: w2
+        ---
+
+        # w2
+
+        ## Main
+
+        The Extra section (required=warn) is absent.
+  expect:
+    - file: w2.md
+      path: "sections"
+      severity: warning
+      message_contains: "Extra"
+
+- name: additional-section-warn
+  description: With additional_sections=warn, an unknown section warns rather than errors.
+  schema: note.yaml
+  documents:
+    - path: n1.md
+      content: |
+        ---
+        note_id: n1
+        title: N1
+        ---
+
+        # N1
+
+        ## Body
+
+        Has an undeclared section.
+
+        ## Surprise
+
+        Unexpected, but only a warning here.
+  expect:
+    - file: n1.md
+      path: "sections"
+      severity: warning
+      message_contains: "Unknown section"
+
+- name: deprecated-subsection-warns
+  description: A subsection marked deprecated warns when present.
+  schema: structure.yaml
+  documents:
+    - path: rec-dep.md
+      content: |
+        ---
+        id: rec-dep
+        code: "1"
+        ---
+
+        # Record 1
+
+        ## Body
+
+        Has a deprecated subsection.
+
+        ## Sub
+
+        ### Alpha
+
+        a
+
+        ### Beta
+
+        b
+
+        ### Gamma
+
+        deprecated
+  expect:
+    - file: rec-dep.md
+      path: "section[Sub]"
+      severity: warning
+      message_contains: "Gamma"
+
+- name: multi-table-concatenation
+  description: Multiple tables under one heading are concatenated; min_rows counts across all.
+  schema: structure.yaml
+  documents:
+    - path: rec-mt.md
+      content: |
+        ---
+        id: rec-mt
+        code: "1"
+        ---
+
+        # Record 1
+
+        ## Body
+
+        Two tables, one row each, together meeting min_rows of 2.
+
+        ## Records
+
+        | When | Level |
+        |------|-------|
+        | 2026-01-01 | a |
+
+        | When | Level |
+        |------|-------|
+        | 2026-02-02 | b |
+  expect: []
+
+- name: title-heading-in-code-fence-ignored
+  description: A "# ..." line inside a fenced code block is not mistaken for the title.
+  schema: structure.yaml
+  documents:
+    - path: rec-fence.md
+      content: |
+        ---
+        id: rec-fence
+        code: "8"
+        ---
+
+        ```
+        # Record 999
+        ```
+
+        # Record 8
+
+        ## Body
+
+        The real title is "Record 8", not the heading inside the fence.
+  expect: []
+
+- name: custom-reference-arrow
+  description: conventions.reference_arrow changes the cross-reference marker.
+  schema: conventions.yaml
+  documents:
+    - path: c1.md
+      content: |
+        ---
+        id: c1
+        ---
+
+        # c1
+
+        ## Links
+
+        - Thing -> `ghost`
+  expect:
+    - file: c1.md
+      path: "section[Links].item"
+      severity: error
+      message_contains: "Unresolved"
+
+- name: custom-unknown-literal
+  description: conventions.unknown_literals changes which entries count as "no reference".
+  schema: conventions.yaml
+  documents:
+    - path: c2.md
+      content: |
+        ---
+        id: c2
+        ---
+
+        # c2
+
+        ## Links
+
+        - TBD
+  expect:
+    - file: c2.md
+      path: "section[Links]"
+      severity: error
+      message_contains: "at least 1"

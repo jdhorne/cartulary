@@ -1,0 +1,22 @@
+# conventions.yaml — conformance schema for configurable conventions
+#
+# Overrides the default cross-reference micro-syntax: the arrow is "->"
+# instead of "→", and the only "no reference here" sentinel is "TBD"
+# instead of the English defaults.
+
+conventions:
+  reference_arrow: "->"
+  unknown_literals: ["TBD"]
+
+primary_key: id
+frontmatter:
+  fields:
+    id: { required: true, primary_key: true }
+
+sections:
+  - heading: Links
+    content:
+      type: ref_list
+      style: unlabeled
+      ref: id
+      min_items: 1

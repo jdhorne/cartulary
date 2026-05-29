@@ -19,6 +19,7 @@ frontmatter:
     id: { type: slug, required: true, primary_key: true }
     code: { required: true }
     rank: { type: rank }
+    owner: { type: slug, ref: id }   # a frontmatter-level cross-reference
 
 sections:
   - heading: Body
@@ -30,6 +31,8 @@ sections:
         required: true
       - heading: Beta
         required: true
+      - heading: Gamma
+        deprecated: true
   - heading: Records
     content:
       type: table

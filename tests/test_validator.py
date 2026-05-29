@@ -11,6 +11,7 @@ capability — cross-document reference resolution with reciprocal
 
 from pathlib import Path
 
+import pytest
 import yaml
 from marko import Markdown
 from marko.ext.gfm import GFM
@@ -519,3 +520,59 @@ def test_json_output_findings_have_expected_keys():
     payload = json.loads(results_to_json(results))
     assert payload, "expected findings for a bad file"
     assert {"file", "path", "message", "severity"} <= set(payload[0])
+
+
+# ── schema meta-validation (validating the schema itself) ────
+
+from cartulary import validate_schema  # noqa: E402
+
+ALL_SCHEMAS = sorted((ROOT / "examples").glob("*.schema.yaml")) + \
+    sorted((ROOT / "conformance" / "schemas").glob("*.yaml"))
+
+
+@pytest.mark.parametrize("schema_path", ALL_SCHEMAS, ids=[p.name for p in ALL_SCHEMAS])
+def test_shipped_schemas_are_clean(schema_path):
+    findings = validate_schema(str(schema_path))
+    assert findings == [], [f"[{f.severity}] {f.path}: {f.message}" for f in findings]
+
+
+def test_meta_unknown_top_level_key_warns():
+    findings = validate_schema({"sektions": [], "frontmatter": {"fields": {}}})
+    assert any(f.severity == "warning" and "sektions" in f.message for f in findings)
+
+
+def test_meta_undefined_value_type_is_error():
+    schema = {"frontmatter": {"fields": {"x": {"type": "nope"}}}}
+    findings = validate_schema(schema)
+    assert any(f.severity == "error" and "nope" in f.message for f in findings)
+
+
+def test_meta_unknown_content_type_is_error():
+    schema = {"sections": [{"heading": "S", "content": {"type": "tabel"}}]}
+    findings = validate_schema(schema)
+    assert any(f.severity == "error" and "tabel" in f.message for f in findings)
+
+
+def test_meta_primary_key_must_name_a_field():
+    schema = {"primary_key": "missing", "frontmatter": {"fields": {"id": {}}}}
+    findings = validate_schema(schema)
+    assert any(f.severity == "error" and f.path.endswith("primary_key") for f in findings)
+
+
+def test_meta_filename_must_match_must_name_a_field():
+    schema = {"filename_must_match": "nope", "frontmatter": {"fields": {"id": {}}}}
+    findings = validate_schema(schema)
+    assert any(f.severity == "error" and "filename_must_match" in f.path for f in findings)
+
+
+def test_meta_misspelled_field_key_warns():
+    # The classic footgun: `requried` instead of `required` silently does nothing.
+    schema = {"frontmatter": {"fields": {"id": {"requried": True}}}}
+    findings = validate_schema(schema)
+    assert any(f.severity == "warning" and "requried" in f.message for f in findings)
+
+
+def test_meta_multi_schema_subschema_path():
+    schema = {"schemas": {"book": {"frontmatter": {"fields": {"x": {"type": "nope"}}}}}}
+    findings = validate_schema(schema)
+    assert any("schema:book" in f.path and "nope" in f.message for f in findings)

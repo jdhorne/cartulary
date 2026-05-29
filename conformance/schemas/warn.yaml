@@ -1,0 +1,23 @@
+# warn.yaml — conformance schema for warning-severity rules
+#
+# Isolates the rules that downgrade to a warning: `required: warn` on a
+# section, and `nullable: warn` on a table column.
+
+primary_key: id
+frontmatter:
+  fields:
+    id: { required: true, primary_key: true }
+
+sections:
+  - heading: Main
+    required: true
+    content: { type: prose }
+  - heading: Extra
+    required: warn            # missing → warning (not error)
+    content: { type: prose }
+  - heading: Grid
+    content:
+      type: table
+      columns:
+        A: {}
+        B: { nullable: warn }  # empty cell → warning (not error)

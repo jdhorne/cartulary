@@ -179,10 +179,19 @@ def visit_table(node: Table) -> TableData:
     return TableData(columns=columns, rows=rows)
 
 
-def visit_list_item(node: ListItem) -> RefItem:
-    """Extract label, name, and cross-reference from a list item."""
+DEFAULT_REFERENCE_ARROW = "→"
+DEFAULT_UNKNOWN_LITERALS = ("Unknown", "unknown", "None known")
+
+
+def visit_list_item(node: ListItem, arrow: str = DEFAULT_REFERENCE_ARROW) -> RefItem:
+    """Extract label, name, and cross-reference from a list item.
+
+    A cross-reference is a back-ticked id preceded by *arrow* (configurable via
+    the schema's `conventions.reference_arrow`; defaults to "→").
+    """
     # Walk the inline children of the paragraph inside the list item
     item = RefItem(raw=extract_text(node).strip())
+    arrow_re = re.escape(arrow)
 
     for child in node.children:
         if not isinstance(child, Paragraph):
@@ -194,15 +203,15 @@ def visit_list_item(node: ListItem) -> RefItem:
                 if label_text.endswith(":"):
                     item.label = label_text[:-1]
             elif isinstance(part, CodeSpan):
-                # CodeSpan after → is a cross-reference
+                # CodeSpan after the arrow is a cross-reference
                 preceding_text = extract_text(parts[i - 1]) if i > 0 else ""
-                if "→" in preceding_text:
+                if arrow in preceding_text:
                     item.ref = part.children.strip() if isinstance(part.children, str) else extract_text(part).strip()
 
-    # Fallback: GFM strikethrough can swallow → `ref` when tildes are nearby,
-    # and extract_text strips backticks.  Try with and without backticks.
+    # Fallback: GFM strikethrough can swallow the arrow + `ref` when tildes are
+    # nearby, and extract_text strips backticks.  Try with and without backticks.
     if item.ref is None:
-        ref_m = re.search(r"→\s*`?([a-z0-9]+(?:-[a-z0-9]+)+)`?", item.raw)
+        ref_m = re.search(arrow_re + r"\s*`?([a-z0-9]+(?:-[a-z0-9]+)+)`?", item.raw)
         if ref_m:
             item.ref = ref_m.group(1).strip()
 
@@ -211,15 +220,15 @@ def visit_list_item(node: ListItem) -> RefItem:
     if item.label:
         name_text = re.sub(r"\*\*\w[\w\s]*?:\*\*\s*", "", name_text)
     if item.ref:
-        name_text = re.sub(r"\s*→\s*`[^`]+`", "", name_text)
+        name_text = re.sub(r"\s*" + arrow_re + r"\s*`[^`]+`", "", name_text)
     item.name = name_text.strip() or None
 
     return item
 
 
-def visit_list(node: List) -> list[RefItem]:
+def visit_list(node: List, arrow: str = DEFAULT_REFERENCE_ARROW) -> list[RefItem]:
     """Extract all items from a bullet/ordered list."""
-    return [visit_list_item(item) for item in node.children if isinstance(item, ListItem)]
+    return [visit_list_item(item, arrow) for item in node.children if isinstance(item, ListItem)]
 
 
 # ════════════════════════════════════════════════════════════
@@ -246,6 +255,12 @@ class SchemaValidator:
                  pk_field_owners: dict[str, set[str]] | None = None):
         self.schema = schema
         self.value_types = schema.get("value_types", {})
+        # Document conventions (the micro-syntax for cross-references), overridable
+        # per schema so the format is not tied to one arrow glyph or to English.
+        conventions = schema.get("conventions", {})
+        self.ref_arrow = conventions.get("reference_arrow", DEFAULT_REFERENCE_ARROW)
+        self.unknown_literals = conventions.get(
+            "unknown_literals", list(DEFAULT_UNKNOWN_LITERALS))
         self.known_ids = known_ids
         self.pk_types = pk_types or {}  # ref_target_name -> field type defn
         # Cross-document type awareness: which document type owns each known id,
@@ -708,7 +723,7 @@ class SchemaValidator:
 
         items: list[RefItem] = []
         for lst in lists:
-            items.extend(visit_list(lst))
+            items.extend(visit_list(lst, self.ref_arrow))
         style = defn.get("style", "unlabeled")
         ref_target = defn.get("ref")
 
@@ -727,15 +742,13 @@ class SchemaValidator:
                     if inverse:
                         self.inverse_refs.append((section.heading, item.ref, inverse))
                 elif not expected.get("allow_unknown"):
-                    unknown_literals = ["Unknown", "unknown"]
-                    if item.name not in unknown_literals:
+                    if item.name not in self.unknown_literals:
                         self._error(f"{path}.{label}",
                                     f"No cross-reference and not marked Unknown",
                                     severity="warning")
 
         elif style == "unlabeled":
-            unknown_literals = ["Unknown", "unknown", "None known"]
-            real = [it for it in items if it.raw.strip() not in unknown_literals]
+            real = [it for it in items if it.raw.strip() not in self.unknown_literals]
             min_items = defn.get("min_items", 0)
             if len(real) < min_items:
                 self._error(path, f"Need at least {min_items} item(s), found {len(real)}")
@@ -773,9 +786,23 @@ def _extract_raw_title(body: str) -> str | None:
 
     marko's GFM extension treats ~ as strikethrough, mangling titles
     like '# Name (~1842–~1901)'. We pull the title from raw text instead.
+
+    Lines inside fenced code blocks are skipped so a '# ...' line in a fence
+    is never mistaken for the title.
     """
+    in_fence = False
+    fence_marker = ""
     for line in body.splitlines():
         stripped = line.strip()
+        if in_fence:
+            # A fence closes on a line that starts with the same marker.
+            if stripped.startswith(fence_marker):
+                in_fence = False
+            continue
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = True
+            fence_marker = stripped[:3]
+            continue
         if stripped.startswith("# ") and not stripped.startswith("## "):
             return stripped[2:].strip()
     return None
@@ -991,17 +1018,149 @@ def load_schema(path: str | Path) -> dict:
     # Multi-schema: propagate shared keys into each sub-schema
     shared_value_types = raw.get("value_types", {})
     shared_definitions = raw.get("definitions", {})
+    shared_conventions = raw.get("conventions", {})
     schemas = {}
     for doc_type, schema in raw["schemas"].items():
         merged_vt = {**shared_value_types, **schema.get("value_types", {})}
         merged_df = {**shared_definitions, **schema.get("definitions", {})}
+        merged_cv = {**shared_conventions, **schema.get("conventions", {})}
         schema = {**schema, "document": doc_type}
         if merged_vt:
             schema["value_types"] = merged_vt
         if merged_df:
             schema["definitions"] = merged_df
+        if merged_cv:
+            schema["conventions"] = merged_cv
         schemas[doc_type] = schema
     return {"_multi": True, "schemas": schemas}
+
+
+# ════════════════════════════════════════════════════════════
+# Schema meta-validation (catch mistakes in the schema itself)
+# ════════════════════════════════════════════════════════════
+
+_TOP_KEYS = {"value_types", "definitions", "frontmatter", "title_pattern", "sections",
+             "primary_key", "filename_must_match", "additional_sections",
+             "additional_subsections", "conventions", "document"}
+_FIELD_KEYS = {"required", "value", "enum", "type", "ref", "primary_key", "items"}
+_ITEMS_KEYS = {"type", "fields", "any_of", "ref", "enum", "value", "required"}
+_VALUE_TYPE_KEYS = {"description", "pattern", "enum", "any_of", "examples", "exists"}
+_SECTION_KEYS = {"heading", "required", "deprecated", "position", "content",
+                 "subsections", "additional_subsections"}
+_CONTENT_KEYS = {
+    "prose": {"type"},
+    "table": {"type", "columns", "min_rows"},
+    "ref_list": {"type", "style", "ref", "min_items", "inverse", "items"},
+    "log": {"type", "entry_pattern"},
+}
+_COLUMN_KEYS = {"type", "enum", "value", "ref", "nullable"}
+_LABELED_ITEM_KEYS = {"label", "ref", "inverse", "allow_unknown"}
+_CONVENTIONS_KEYS = {"reference_arrow", "unknown_literals"}
+
+
+def validate_schema(path_or_dict) -> list[ValidationError]:
+    """Validate a schema *itself* (not a document) and return findings.
+
+    Catches the common authoring mistakes a document validator would otherwise
+    swallow silently: misspelled keys (warnings), a ``type:`` naming an
+    undefined value_type, an unknown content type, and ``primary_key`` /
+    ``filename_must_match`` pointing at a non-existent field (errors).
+    """
+    if isinstance(path_or_dict, (str, Path)):
+        with open(path_or_dict) as f:
+            raw = yaml.safe_load(f)
+    else:
+        raw = path_or_dict
+
+    errs: list[ValidationError] = []
+
+    def err(p, m, sev="error"):
+        errs.append(ValidationError(path=p, message=m, severity=sev))
+
+    def unknown_keys(d, allowed, p):
+        if isinstance(d, dict):
+            for k in d:
+                if k not in allowed:
+                    err(p, f"Unknown key '{k}'", "warning")
+
+    def check_conventions(cv, p):
+        unknown_keys(cv, _CONVENTIONS_KEYS, p)
+
+    def check_type_ref(type_name, p, vts):
+        if isinstance(type_name, str) and type_name != "string" and type_name not in vts:
+            err(p, f"type '{type_name}' is not a defined value_type")
+
+    def check_field(fdef, p, vts):
+        if not isinstance(fdef, dict):
+            return
+        unknown_keys(fdef, _FIELD_KEYS, p)
+        check_type_ref(fdef.get("type"), p, vts)
+        if isinstance(fdef.get("items"), dict):
+            items = fdef["items"]
+            unknown_keys(items, _ITEMS_KEYS, f"{p}.items")
+            if "any_of" not in items and items.get("type") != "object":
+                check_type_ref(items.get("type"), f"{p}.items", vts)
+
+    def check_content(content, p, vts):
+        if not isinstance(content, dict):
+            return
+        ctype = content.get("type")
+        if ctype not in _CONTENT_KEYS:
+            err(p, f"Unknown content type '{ctype}' (expected one of: "
+                   f"{', '.join(sorted(_CONTENT_KEYS))})")
+            return
+        unknown_keys(content, _CONTENT_KEYS[ctype], p)
+        for col, cdef in (content.get("columns") or {}).items():
+            unknown_keys(cdef, _COLUMN_KEYS, f"{p}.columns.{col}")
+            if isinstance(cdef, dict):
+                check_type_ref(cdef.get("type"), f"{p}.columns.{col}", vts)
+        if ctype == "ref_list":
+            for j, it in enumerate(content.get("items") or []):
+                unknown_keys(it, _LABELED_ITEM_KEYS, f"{p}.items[{j}]")
+
+    def check_section(sec, p, vts):
+        if not isinstance(sec, dict):
+            return
+        unknown_keys(sec, _SECTION_KEYS, p)
+        if "content" in sec:
+            check_content(sec["content"], f"{p}.content", vts)
+        for j, sub in enumerate(sec.get("subsections") or []):
+            check_section(sub, f"{p}.subsections[{j}]", vts)
+
+    def check_one(schema, p, vts):
+        unknown_keys(schema, _TOP_KEYS, p)
+        check_conventions(schema.get("conventions"), f"{p}.conventions")
+        for name, defn in (schema.get("value_types") or {}).items():
+            unknown_keys(defn, _VALUE_TYPE_KEYS, f"{p}.value_types.{name}")
+        fields = (schema.get("frontmatter") or {}).get("fields") or {}
+        for fname, fdef in fields.items():
+            check_field(fdef, f"{p}.frontmatter.{fname}", vts)
+        pk = schema.get("primary_key")
+        if isinstance(pk, str) and pk not in fields:
+            err(f"{p}.primary_key", f"primary_key '{pk}' is not a defined frontmatter field")
+        fmm = schema.get("filename_must_match")
+        if isinstance(fmm, str) and fmm not in fields:
+            err(f"{p}.filename_must_match",
+                f"filename_must_match '{fmm}' is not a defined frontmatter field")
+        for j, sec in enumerate(schema.get("sections") or []):
+            check_section(sec, f"{p}.sections[{j}]", vts)
+
+    if isinstance(raw, dict) and "schemas" in raw:
+        unknown_keys(raw, {"schemas", "value_types", "definitions", "conventions"}, "schema")
+        check_conventions(raw.get("conventions"), "schema.conventions")
+        shared_vt = set((raw.get("value_types") or {}).keys())
+        sub = raw.get("schemas")
+        if not isinstance(sub, dict):
+            err("schema.schemas", "'schemas' must be a mapping of document_type to schema")
+        else:
+            for dt, s in sub.items():
+                vts = shared_vt | set((s.get("value_types") or {}).keys())
+                check_one(s, f"schema:{dt}", vts)
+    else:
+        vts = set((raw.get("value_types") or {}).keys())
+        check_one(raw, "schema", vts)
+
+    return errs
 
 
 # ════════════════════════════════════════════════════════════
@@ -1032,6 +1191,21 @@ def main():
     parser.add_argument("--json", action="store_true",
                         help="Emit findings as a JSON array (for editors/CI)")
     args = parser.parse_args()
+
+    # Validate the schema itself first; bad schemas are a usage error.
+    schema_findings = validate_schema(args.schema)
+    schema_errors = [f for f in schema_findings if f.severity == "error"]
+    if schema_findings and not args.json:
+        print(f"\n  schema: {args.schema}")
+        for f in schema_findings:
+            icon = "✗" if f.severity == "error" else "⚠"
+            print(f"  {icon} [{f.path}] {f.message}")
+    if schema_errors:
+        if args.json:
+            print(json.dumps([
+                {"file": args.schema, "path": f.path, "message": f.message,
+                 "severity": f.severity} for f in schema_findings], indent=2))
+        sys.exit(2)
 
     # Filter to existing files
     exit_code = 0
