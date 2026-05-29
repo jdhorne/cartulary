@@ -208,7 +208,8 @@ dangling half of the relationship that a frontmatter or link checker can't:
 - Sections: required/deprecated, strict ordering, `position: last`,
   unknown-section policy, and recursive subsections.
 - Content types: `prose`, typed `table` (per-column types, `nullable`,
-  `min_rows`), `ref_list` (labeled & unlabeled), and `log` (regex per entry).
+  `min_rows`), `ref_list` (labeled & unlabeled, with `min_items`/`max_items`
+  cardinality), and `log` (regex per entry).
 - **Cross-document**: reference resolution (refs must resolve **and** point at
   the right document *type*), reciprocal (`inverse`) checks,
   duplicate-primary-key detection, and multi-schema routing by

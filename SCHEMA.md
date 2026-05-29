@@ -223,10 +223,15 @@ A bullet list of cross-references. Two styles:
 content:
   type: ref_list
   style: unlabeled
-  ref: author_id              # PK field of the target document type
-  min_items: 1                # minimum non-"Unknown" items
+  ref: author                 # the target document type (see References)
+  min_items: 1                # minimum non-"Unknown" items (cardinality)
+  max_items: 3                # maximum non-"Unknown" items (cardinality, optional)
   inverse: Books              # reciprocal section on the target (optional)
 ```
+
+`min_items` and `max_items` count only "real" items (those not in the
+`unknown_literals` set), so "at most two parents" is `max_items: 2` and
+"exactly one author" is `min_items: 1` with `max_items: 1`.
 
 ```yaml
 # labeled — named slots, e.g. "**Parent:** Name → `id`"
@@ -270,16 +275,19 @@ content:
 This is what distinguishes cartulary from frontmatter/structure validators:
 **referential integrity across a corpus.**
 
-- A `ref:` value names the **primary-key field of the target document type**.
-  When you validate multiple files together (`validate_files` / passing
-  several files on the CLI), every collected reference is checked against the
-  set of all known primary keys; unresolved references are reported.
-- A reference must resolve to the **right kind of document**. Because each PK
-  field name belongs to a document type, `ref: author_id` means "must point at
-  an `author`" — a value that happens to match the format and resolves to some
-  *other* type (e.g. a `book`) is reported as an error, not silently accepted.
-  (For this to be unambiguous, give each document type a distinct PK field
-  name in a multi-schema file.)
+- A `ref:` value names its **target**. Preferred form: the **document type**
+  it points at (`ref: author`). Legacy form: a **PK field name**
+  (`ref: author_id`), kept for compatibility. When you validate multiple files
+  together (`validate_files` / passing several files on the CLI), every
+  collected reference is checked against the set of all known primary keys;
+  unresolved references are reported.
+- A reference must resolve to the **right kind of document**. `ref: author`
+  means "must point at an `author`" — a value that matches the format and
+  resolves to some *other* type (e.g. a `book`) is an error, not silently
+  accepted. Targeting a **document type** is always unambiguous, even when two
+  types share a PK field name. The legacy PK-field form infers the type from
+  the field's owner(s); if several types share that field name it degrades to
+  "any of them", so prefer the document-type form in that case.
 - A `ref:` is also **format-validated** against the target PK's type, so a
   malformed id is caught even before resolution.
 - `inverse: <section>` declares a **reciprocal** expectation: if document A's

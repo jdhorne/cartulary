@@ -46,6 +46,12 @@ sections:
       style: labeled
       items:
         - label: Owner
+  - heading: Refs
+    content:
+      type: ref_list
+      style: unlabeled
+      ref: id
+      max_items: 2          # cardinality: at most two references
   - heading: Log
     content:
       type: log

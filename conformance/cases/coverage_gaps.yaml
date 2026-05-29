@@ -314,3 +314,87 @@
       path: "section[Links]"
       severity: error
       message_contains: "at least 1"
+
+- name: ref-list-max-items-exceeded
+  description: An unlabeled reference list with more than max_items real entries is an error.
+  schema: structure.yaml
+  documents:
+    - path: rec-card.md
+      content: |
+        ---
+        id: rec-card
+        code: "1"
+        ---
+
+        # Record 1
+
+        ## Body
+
+        Three references where at most two are allowed.
+
+        ## Refs
+
+        - one → `rec-card`
+        - two → `rec-card`
+        - three → `rec-card`
+  expect:
+    - file: rec-card.md
+      path: "section[Refs]"
+      severity: error
+      message_contains: "At most 2"
+
+- name: ref-targets-document-type-wrong
+  description: A ref naming a document type rejects a resolved id of another type, even when PK field names collide.
+  schema: shared-pk.yaml
+  documents:
+    - path: w1.md
+      content: |
+        ---
+        document_type: widget
+        id: w1
+        ---
+
+        # w1
+
+        ## Related
+
+        - G → `g1`
+    - path: g1.md
+      content: |
+        ---
+        document_type: gadget
+        id: g1
+        ---
+
+        # g1
+  expect:
+    - file: w1.md
+      path: "section[Related].item"
+      severity: error
+      message_contains: "expected"
+
+- name: ref-targets-document-type-correct
+  description: The same ref resolving to the right document type is clean.
+  schema: shared-pk.yaml
+  documents:
+    - path: w1.md
+      content: |
+        ---
+        document_type: widget
+        id: w1
+        ---
+
+        # w1
+
+        ## Related
+
+        - W → `w2`
+    - path: w2.md
+      content: |
+        ---
+        document_type: widget
+        id: w2
+        ---
+
+        # w2
+  expect: []

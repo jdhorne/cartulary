@@ -64,25 +64,26 @@ schemas:
         content:
           type: ref_list
           style: unlabeled
-          ref: person_id
+          ref: person            # must resolve to a `person` document
+          max_items: 2           # at most two (biological) parents
           inverse: Children      # a parent listed here must list me as a child
       - heading: Spouse
         content:
           type: ref_list
           style: unlabeled
-          ref: person_id
+          ref: person
           inverse: Spouse        # marriage is mutual — the spouse must list me back
       - heading: Children
         content:
           type: ref_list
           style: unlabeled
-          ref: person_id
+          ref: person
           inverse: Parents       # a child listed here must list me as a parent
       - heading: Documented In
         content:
           type: ref_list
           style: unlabeled
-          ref: source_id         # points into the `source` document type
+          ref: source            # must resolve to a `source` document
       - heading: Change Log
         position: last
         content:

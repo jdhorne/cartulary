@@ -1,0 +1,27 @@
+# shared-pk.yaml — two document types that deliberately share the PK field `id`
+#
+# Demonstrates that `ref:` targeting a document *type* stays precise even when
+# several types use the same primary-key field name (here, both use `id`).
+# `ref: widget` must resolve to a widget, never to a gadget.
+
+schemas:
+  widget:
+    additional_sections: true
+    frontmatter:
+      fields:
+        document_type: { value: widget, required: true }
+        id: { required: true, primary_key: true }
+    sections:
+      - heading: Related
+        content:
+          type: ref_list
+          style: unlabeled
+          ref: widget          # the document type, not the field name `id`
+
+  gadget:
+    additional_sections: true
+    frontmatter:
+      fields:
+        document_type: { value: gadget, required: true }
+        id: { required: true, primary_key: true }
+    sections: []

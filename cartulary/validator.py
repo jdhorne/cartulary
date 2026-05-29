@@ -250,9 +250,8 @@ class SchemaValidator:
     """Validate a parsed markdown document against a YAML schema."""
 
     def __init__(self, schema: dict, known_ids: set[str] | None = None,
-                 pk_types: dict[str, dict] | None = None,
                  known_id_types: dict[str, str] | None = None,
-                 pk_field_owners: dict[str, set[str]] | None = None):
+                 ref_targets: dict[str, tuple[set[str], dict]] | None = None):
         self.schema = schema
         self.value_types = schema.get("value_types", {})
         # Document conventions (the micro-syntax for cross-references), overridable
@@ -262,12 +261,14 @@ class SchemaValidator:
         self.unknown_literals = conventions.get(
             "unknown_literals", list(DEFAULT_UNKNOWN_LITERALS))
         self.known_ids = known_ids
-        self.pk_types = pk_types or {}  # ref_target_name -> field type defn
-        # Cross-document type awareness: which document type owns each known id,
-        # and which document type(s) each PK field name belongs to. Together
-        # these let a ref be checked for pointing at the right *kind* of document.
+        # Cross-document type awareness. ref_targets maps each valid `ref:` value
+        # — a document type name, or (legacy) a PK field name — to the set of
+        # document types it may resolve to and the PK type definition used to
+        # format-check it. Targeting a document type stays precise even when two
+        # types share a PK field name; targeting a shared field name degrades to
+        # "any owner of that field".
         self.known_id_types = known_id_types or {}
-        self.pk_field_owners = pk_field_owners or {}
+        self.ref_targets = ref_targets or {}
         self.errors: list[ValidationError] = []
         self.refs_found: list[tuple[str, str, str | None]] = []  # (path, ref_value, ref_target)
         self.inverse_refs: list[tuple[str, str, str]] = []  # (section, target_id, inverse_section)
@@ -318,25 +319,27 @@ class SchemaValidator:
     def _collect_ref(self, ref: str, path: str, ref_target: str | None = None):
         """Record a ref for cross-document resolution checking.
 
-        If *ref_target* names a known PK field (via pk_types), validate
-        the ref value against that PK's type definition.
+        If *ref_target* is a known target (a document type or PK field name),
+        validate the ref value against that target's PK type definition.
         """
         self.refs_found.append((path, ref, ref_target))
-        if ref_target and ref_target in self.pk_types:
-            self._check_value(ref, self.pk_types[ref_target], path)
+        target = self.ref_targets.get(ref_target) if ref_target else None
+        if target and target[1]:
+            self._check_value(ref, target[1], path)
 
     def _check_refs(self):
         """If known_ids was provided, check that refs resolve — and, when the
-        target's owning document type is known, that they resolve to the right
-        *kind* of document (a `ref: author_id` must point at an author, not just
-        at any id that happens to share the format)."""
+        target's document type is known, that they resolve to the right *kind*
+        of document (a `ref: author` — or legacy `ref: author_id` — must point
+        at an author, not just at any id that happens to share the format)."""
         if self.known_ids is None:
             return
         for path, ref, ref_target in self.refs_found:
             if ref not in self.known_ids:
                 self._error(path, f"Unresolved reference: '{ref}'")
                 continue
-            expected = self.pk_field_owners.get(ref_target) if ref_target else None
+            target = self.ref_targets.get(ref_target) if ref_target else None
+            expected = target[0] if target else None
             actual = self.known_id_types.get(ref)
             if expected and actual and actual not in expected:
                 want = ", ".join(sorted(expected))
@@ -750,8 +753,11 @@ class SchemaValidator:
         elif style == "unlabeled":
             real = [it for it in items if it.raw.strip() not in self.unknown_literals]
             min_items = defn.get("min_items", 0)
+            max_items = defn.get("max_items")
             if len(real) < min_items:
                 self._error(path, f"Need at least {min_items} item(s), found {len(real)}")
+            if max_items is not None and len(real) > max_items:
+                self._error(path, f"At most {max_items} item(s) allowed, found {len(real)}")
             inverse = defn.get("inverse")
             for item in real:
                 if item.ref is not None:
@@ -873,20 +879,25 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
         doc_type = loaded.get("document", "_default")
         schemas = {doc_type: loaded}
 
-    # Build pk_field per schema, and pk_types mapping ref target names to
-    # their type definitions (so refs can be format-validated against the
-    # correct PK type regardless of which schema the ref originates from).
+    # Build the PK field per schema and the ref-target table. A `ref:` value may
+    # name a document type (precise) or a PK field name (legacy; degrades to
+    # "any type owning that field" when several share it). ref_targets maps each
+    # such name to (allowed document types, PK type definition for formatting).
     pk_fields: dict[str, str | None] = {}
-    pk_types: dict[str, dict] = {}
-    pk_field_owners: dict[str, set[str]] = {}  # pk field name -> document types using it
+    ref_targets: dict[str, tuple[set[str], dict]] = {}
+
+    def _register_target(name: str, doc_type: str, defn: dict):
+        owners, _ = ref_targets.setdefault(name, (set(), defn))
+        owners.add(doc_type)
+
     for doc_type, schema in schemas.items():
         pk_name = _resolve_pk_field(schema)
         pk_fields[doc_type] = pk_name
         if pk_name:
-            pk_field_owners.setdefault(pk_name, set()).add(doc_type)
             fm_fields = schema.get("frontmatter", {}).get("fields", {})
-            if pk_name in fm_fields:
-                pk_types[pk_name] = fm_fields[pk_name]
+            pk_defn = fm_fields.get(pk_name, {})
+            _register_target(doc_type, doc_type, pk_defn)   # ref: <document type>
+            _register_target(pk_name, doc_type, pk_defn)    # ref: <pk field> (legacy)
 
     # Pass 1: parse all files, route to schema, collect primary keys
     parsed: list[tuple[str, str | None, dict, dict, str | None, list[Section]]] = []
@@ -947,9 +958,9 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
     ref_index: dict[str, set[tuple[str, str]]] = {}
 
     for fp, dt, schema, frontmatter, title, sections in parsed:
-        validator = SchemaValidator(schema, known_ids=known_ids, pk_types=pk_types,
+        validator = SchemaValidator(schema, known_ids=known_ids,
                                     known_id_types=id_to_type,
-                                    pk_field_owners=pk_field_owners)
+                                    ref_targets=ref_targets)
         errors = validator.validate(frontmatter, title, sections, filepath=fp)
 
         pk_field = pk_fields.get(dt)
@@ -1050,7 +1061,7 @@ _SECTION_KEYS = {"heading", "required", "deprecated", "position", "content",
 _CONTENT_KEYS = {
     "prose": {"type"},
     "table": {"type", "columns", "min_rows"},
-    "ref_list": {"type", "style", "ref", "min_items", "inverse", "items"},
+    "ref_list": {"type", "style", "ref", "min_items", "max_items", "inverse", "items"},
     "log": {"type", "entry_pattern"},
 }
 _COLUMN_KEYS = {"type", "enum", "value", "ref", "nullable"}

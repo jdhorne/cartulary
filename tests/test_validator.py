@@ -576,3 +576,64 @@ def test_meta_multi_schema_subschema_path():
     schema = {"schemas": {"book": {"frontmatter": {"fields": {"x": {"type": "nope"}}}}}}
     findings = validate_schema(schema)
     assert any("schema:book" in f.path and "nope" in f.message for f in findings)
+
+
+# ── ref may target a document type (decoupled from PK field naming) ──
+
+def _shared_pk_schema():
+    """Two document types that deliberately share the PK field name `id`."""
+    def kind(name):
+        return {
+            "frontmatter": {"fields": {
+                "document_type": {"value": name},
+                "id": {"required": True, "primary_key": True}}},
+            "additional_sections": True,
+            "sections": [{"heading": "Related", "content": {
+                "type": "ref_list", "style": "unlabeled", "ref": "widget"}}],
+        }
+    return {"schemas": {"widget": kind("widget"), "gadget": kind("gadget")}}
+
+
+def test_ref_targets_document_type_even_with_shared_pk_field(tmp_path):
+    sp = dump_schema(tmp_path, "s.yaml", _shared_pk_schema())
+    w = write(tmp_path, "w1.md",
+              "---\ndocument_type: widget\nid: w1\n---\n\n# w1\n\n## Related\n\n- G → `g1`\n")
+    g = write(tmp_path, "g1.md", "---\ndocument_type: gadget\nid: g1\n---\n\n# g1\n")
+    results = validate_files(sp, [w, g])
+    # `ref: widget` must reject a gadget, despite both types using PK field `id`.
+    assert any("widget" in e.message and "gadget" in e.message for e in results[w]), \
+        [f"{e.path}: {e.message}" for e in results[w]]
+
+
+def test_ref_targets_document_type_correct_is_clean(tmp_path):
+    sp = dump_schema(tmp_path, "s.yaml", _shared_pk_schema())
+    w = write(tmp_path, "w1.md",
+              "---\ndocument_type: widget\nid: w1\n---\n\n# w1\n\n## Related\n\n- W → `w2`\n")
+    w2 = write(tmp_path, "w2.md", "---\ndocument_type: widget\nid: w2\n---\n\n# w2\n")
+    results = validate_files(sp, [w, w2])
+    assert not any("expected" in e.message.lower() or "resolves to" in e.message.lower()
+                   for e in results[w]), [f"{e.path}: {e.message}" for e in results[w]]
+
+
+# ── reference-list cardinality (max_items) ───────────────────
+
+def test_ref_list_max_items_enforced():
+    schema = {"frontmatter": {"fields": {}}, "additional_sections": True,
+              "sections": [{"heading": "Parents", "content": {
+                  "type": "ref_list", "style": "unlabeled", "ref": "id",
+                  "min_items": 0, "max_items": 2}}]}
+    fm, title, sections = parse(
+        "# T\n\n## Parents\n\n- A → `p1`\n- B → `p2`\n- C → `p3`\n")
+    errors = SchemaValidator(schema).validate(fm, title, sections)
+    assert any("at most 2" in e.message.lower() for e in errors), \
+        [e.message for e in errors]
+
+
+def test_ref_list_within_max_items_is_clean():
+    schema = {"frontmatter": {"fields": {}}, "additional_sections": True,
+              "sections": [{"heading": "Parents", "content": {
+                  "type": "ref_list", "style": "unlabeled", "ref": "id",
+                  "min_items": 0, "max_items": 2}}]}
+    fm, title, sections = parse("# T\n\n## Parents\n\n- A → `p1`\n- B → `p2`\n")
+    errors = SchemaValidator(schema).validate(fm, title, sections)
+    assert not any("most" in e.message.lower() for e in errors)
