@@ -36,6 +36,7 @@ A schema is a YAML file. It comes in two shapes:
 | `sections` | per schema | Ordered list of section rules (see [Sections](#sections)). |
 | `primary_key` | per schema | Name of the frontmatter field that uniquely identifies the document. Equivalent to setting `primary_key: true` on the field. |
 | `filename_must_match` | per schema | Name of a frontmatter field whose value must equal the file's stem (filename without extension). |
+| `additional_fields` | per schema | `true` (default) allows undeclared frontmatter fields; `false` errors on them; `"warn"` warns. `document_type` is always exempt. |
 | `additional_sections` | per schema | `false` (default) errors on unknown sections; `"warn"` warns; `true` allows them. |
 | `additional_subsections` | per schema | Document-level default for unknown subsections; overridable per section. |
 | `conventions` | both | Overrides the reference micro-syntax (arrow, "no reference" literals). In multi-schema files, declared once at the top and shared (see [Conventions](#conventions)). |
@@ -103,6 +104,12 @@ Per-field keys:
 - `primary_key` — marks this field as the document's unique identifier.
 - `ref` — names the **primary-key field of the document type this value points
   to**. Used for cross-document resolution (see [References](#references)).
+
+By default any field not declared here is allowed. Set the schema-level
+`additional_fields: false` to error on undeclared fields (or `"warn"` to warn) —
+the frontmatter analogue of [`additional_sections`](#sections). `document_type`
+is always exempt, since in multi-schema files it is the routing field rather
+than a content field.
 
 ### List-valued fields
 

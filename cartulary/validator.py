@@ -350,6 +350,18 @@ class SchemaValidator:
 
     def _check_frontmatter(self, fm: dict):
         fields = self.schema.get("frontmatter", {}).get("fields", {})
+
+        # Unknown-field policy, mirroring `additional_sections`: permissive by
+        # default, or reject/`warn` on any field not declared above. `document_type`
+        # is always exempt — it's the multi-schema routing field, not a content field.
+        additional = self.schema.get("additional_fields", True)
+        if additional is not True:
+            for name in fm:
+                if name in fields or name == "document_type":
+                    continue
+                severity = "warning" if additional == "warn" else "error"
+                self._error(f"frontmatter.{name}", f"Unknown field '{name}'", severity=severity)
+
         for name, defn in fields.items():
             value = fm.get(name)
             if defn.get("required") and (value is None or value == ""):
@@ -1051,8 +1063,8 @@ def load_schema(path: str | Path) -> dict:
 # ════════════════════════════════════════════════════════════
 
 _TOP_KEYS = {"value_types", "definitions", "frontmatter", "title_pattern", "sections",
-             "primary_key", "filename_must_match", "additional_sections",
-             "additional_subsections", "conventions", "document"}
+             "primary_key", "filename_must_match", "additional_fields",
+             "additional_sections", "additional_subsections", "conventions", "document"}
 _FIELD_KEYS = {"required", "value", "enum", "type", "ref", "primary_key", "items"}
 _ITEMS_KEYS = {"type", "fields", "any_of", "ref", "enum", "value", "required"}
 _VALUE_TYPE_KEYS = {"description", "pattern", "enum", "any_of", "examples", "exists"}

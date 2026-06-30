@@ -637,3 +637,34 @@ def test_ref_list_within_max_items_is_clean():
     fm, title, sections = parse("# T\n\n## Parents\n\n- A → `p1`\n- B → `p2`\n")
     errors = SchemaValidator(schema).validate(fm, title, sections)
     assert not any("most" in e.message.lower() for e in errors)
+
+
+# ── strict frontmatter (additional_fields) ──────────────────
+
+def test_strict_frontmatter_rejects_unknown_field():
+    schema = {"additional_fields": False,
+              "frontmatter": {"fields": {"id": {"required": True}}}, "sections": []}
+    errors = SchemaValidator(schema).validate({"id": "x", "colour": "blue"}, None, [])
+    assert any(e.path == "frontmatter.colour" and e.severity == "error" for e in errors)
+
+
+def test_strict_frontmatter_warn():
+    schema = {"additional_fields": "warn",
+              "frontmatter": {"fields": {"id": {}}}, "sections": []}
+    errors = SchemaValidator(schema).validate({"id": "x", "colour": "blue"}, None, [])
+    assert any(e.path == "frontmatter.colour" and e.severity == "warning" for e in errors)
+
+
+def test_frontmatter_permissive_by_default():
+    schema = {"frontmatter": {"fields": {"id": {}}}, "sections": []}
+    errors = SchemaValidator(schema).validate({"id": "x", "colour": "blue"}, None, [])
+    assert not any("colour" in e.path for e in errors)
+
+
+def test_strict_frontmatter_exempts_document_type():
+    schema = {"additional_fields": False,
+              "frontmatter": {"fields": {"id": {}}}, "sections": []}
+    errors = SchemaValidator(schema).validate({"id": "x", "document_type": "thing"}, None, [])
+    assert not any("document_type" in e.path for e in errors)
+
+

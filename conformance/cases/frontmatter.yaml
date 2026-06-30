@@ -136,3 +136,23 @@
 
         Everything in order.
   expect: []
+
+- name: strict-frontmatter-rejects-unknown-field
+  description: >
+    With additional_fields:false, a frontmatter field not declared in the schema
+    is an error; document_type is exempt as the multi-schema routing field.
+  schema: strict-frontmatter.yaml
+  documents:
+    - path: extra.md
+      content: |
+        ---
+        id: extra
+        document_type: thing
+        colour: blue
+        ---
+
+        # Extra
+  expect:
+    - file: extra.md
+      path: "frontmatter.colour"
+      severity: error

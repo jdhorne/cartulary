@@ -1,0 +1,7 @@
+# A schema that forbids undeclared frontmatter fields.
+additional_fields: false
+frontmatter:
+  fields:
+    id:
+      required: true
+sections: []
