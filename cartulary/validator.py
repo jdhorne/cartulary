@@ -518,24 +518,9 @@ class SchemaValidator:
         return self._value_passes(str(item), opt)
 
     def _value_passes(self, value: str, defn: dict) -> bool:
-        """Pure: does value pass type/value/enum check? Mirrors _check_value without writing errors."""
-        if "value" in defn:
-            return value == str(defn["value"])
-        if "enum" in defn:
-            return value in [str(v) for v in defn["enum"]]
-        type_name = defn.get("type")
-        if not type_name or type_name == "string":
-            return True
-        type_def = self.value_types.get(type_name)
-        if not type_def:
-            return True
-        if "pattern" in type_def:
-            return bool(re.match(type_def["pattern"], value))
-        if "enum" in type_def:
-            return value in [str(v) for v in type_def["enum"]]
-        if "any_of" in type_def:
-            return self._matches_any_of(value, type_def["any_of"])
-        return True
+        """Pure shape check, no errors written — used for any_of option probing."""
+        ok, _ = self._evaluate_value(value, defn)
+        return ok
 
     # ── Title ────────────────────────────────────────────
 
@@ -567,39 +552,63 @@ class SchemaValidator:
 
     # ── Value checking ───────────────────────────────────
 
-    def _check_value(self, value: str, defn: dict, path: str):
+    def _evaluate_value(self, value: str, defn: dict) -> tuple[bool, str | None]:
+        """Match *value* against a field/value_type definition.
+
+        Pure: performs no I/O and writes no errors. Returns ``(ok, message)``
+        where ``message`` is the finding text on failure and ``None`` on success.
+        This is the single source of truth for value/enum/type matching, shared
+        by :meth:`_check_value` (which emits the message) and :meth:`_value_passes`
+        (which only needs the boolean, for any_of option probing). The on-disk
+        ``exists`` check lives in ``_check_value`` instead — it has a side effect
+        and its own severity, so it is not part of the pure match.
+        """
         if "value" in defn:
             if value != str(defn["value"]):
-                self._error(path, f"'{value}' must be '{defn['value']}'")
-            return
+                return False, f"'{value}' must be '{defn['value']}'"
+            return True, None
         if "enum" in defn:
             if value not in [str(v) for v in defn["enum"]]:
-                self._error(path, f"'{value}' not in {defn['enum']}")
-            return
+                return False, f"'{value}' not in {defn['enum']}"
+            return True, None
 
         type_name = defn.get("type")
         if not type_name or type_name == "string":
-            return
-
+            return True, None
         type_def = self.value_types.get(type_name)
         if not type_def:
-            return
+            return True, None
 
         if "pattern" in type_def:
             if not re.match(type_def["pattern"], value):
                 desc = type_def.get("description", type_def["pattern"])
-                self._error(path, f"'{value}' doesn't match type '{type_name}' ({desc})")
-                return  # skip exists check if pattern fails
-        elif "enum" in type_def:
+                return False, f"'{value}' doesn't match type '{type_name}' ({desc})"
+            return True, None
+        if "enum" in type_def:
             if value not in [str(v) for v in type_def["enum"]]:
-                self._error(path, f"'{value}' not in {type_name} values {type_def['enum']}")
-            return
-        elif "any_of" in type_def:
+                return False, f"'{value}' not in {type_name} values {type_def['enum']}"
+            return True, None
+        if "any_of" in type_def:
             if not self._matches_any_of(value, type_def["any_of"]):
-                self._error(path, f"'{value}' doesn't match any option for type '{type_name}'")
+                return False, f"'{value}' doesn't match any option for type '{type_name}'"
+            return True, None
+        return True, None
+
+    def _check_value(self, value: str, defn: dict, path: str):
+        ok, message = self._evaluate_value(value, defn)
+        if not ok:
+            self._error(path, message)
             return
 
-        # File existence check: resolve value relative to the validated file
+        # On-disk existence check for `exists` value_types. Applies only to
+        # pattern-or-bare types (an enum/any_of type returns above), matching the
+        # original control flow; skipped when the pattern itself failed.
+        type_name = defn.get("type")
+        if not type_name or type_name == "string":
+            return
+        type_def = self.value_types.get(type_name)
+        if not type_def or "enum" in type_def or "any_of" in type_def:
+            return
         exists_def = type_def.get("exists")
         if exists_def and self.filepath:
             roots = exists_def.get("relative_to", ".")
