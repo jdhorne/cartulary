@@ -1273,6 +1273,45 @@ def results_to_json(results: dict[str, list[ValidationError]]) -> str:
     return json.dumps(findings, indent=2)
 
 
+_MARKDOWN_SUFFIXES = (".md", ".markdown")
+
+
+def _expand_paths(paths: list[str]) -> tuple[list[str], list[str]]:
+    """Expand CLI path arguments into a concrete list of markdown files.
+
+    Each argument may be a file *or a directory*; directories are walked
+    recursively for ``*.md`` / ``*.markdown`` files so ``cartulary schema.yaml
+    docs/`` works without the caller relying on shell globstar. Explicitly named
+    files are kept regardless of extension (the suffix filter applies only to
+    directory walking). Returns ``(files, missing)`` where *files* is the
+    deterministically sorted, de-duplicated set of existing files and *missing*
+    lists arguments that do not exist.
+    """
+    files: list[str] = []
+    missing: list[str] = []
+    for arg in paths:
+        p = Path(arg)
+        if p.is_dir():
+            files.extend(
+                str(f) for f in sorted(p.rglob("*"))
+                if f.is_file() and f.suffix.lower() in _MARKDOWN_SUFFIXES
+            )
+        elif p.exists():
+            files.append(arg)
+        else:
+            missing.append(arg)
+    # De-duplicate (a file may be named twice, or live under a directory that was
+    # also passed) while preserving discovery order.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for f in files:
+        key = str(Path(f).resolve())
+        if key not in seen:
+            seen.add(key)
+            deduped.append(f)
+    return deduped, missing
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Validate markdown against schema")
@@ -1298,16 +1337,13 @@ def main():
                  "severity": f.severity} for f in schema_findings], indent=2))
         sys.exit(2)
 
-    # Filter to existing files
+    # Expand any directory arguments to the markdown files they contain.
     exit_code = 0
-    valid_files = []
-    for filepath in args.files:
-        if not Path(filepath).exists():
-            if not args.json:
-                print(f"  ERROR: File not found: {filepath}")
-            exit_code = 1
-        else:
-            valid_files.append(filepath)
+    valid_files, missing = _expand_paths(args.files)
+    for filepath in missing:
+        if not args.json:
+            print(f"  ERROR: File not found: {filepath}")
+        exit_code = 1
 
     if not valid_files:
         if args.json:
