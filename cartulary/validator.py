@@ -182,12 +182,35 @@ def visit_table(node: Table) -> TableData:
 DEFAULT_REFERENCE_ARROW = "→"
 DEFAULT_UNKNOWN_LITERALS = ("Unknown", "unknown", "None known")
 
+# Generic id shape used by the strikethrough fallback (below) when the schema
+# declares no id pattern to derive from. Word characters and hyphens cover the
+# common slug/snake/camel conventions without the caller having to configure it.
+GENERIC_ID_PATTERN = r"[\w-]+"
 
-def visit_list_item(node: ListItem, arrow: str = DEFAULT_REFERENCE_ARROW) -> RefItem:
+
+def _strip_anchors(pattern: str) -> str:
+    """Drop leading ``^`` / trailing ``$`` so a value_type pattern can be
+    embedded *inside* a larger search regex (the id is mid-string in raw text,
+    not the whole string). The anchors are zero-width, so removing them keeps
+    the pattern valid."""
+    if pattern.startswith("^"):
+        pattern = pattern[1:]
+    if pattern.endswith("$"):
+        pattern = pattern[:-1]
+    return pattern
+
+
+def visit_list_item(node: ListItem, arrow: str = DEFAULT_REFERENCE_ARROW,
+                    id_pattern: str | None = None) -> RefItem:
     """Extract label, name, and cross-reference from a list item.
 
     A cross-reference is a back-ticked id preceded by *arrow* (configurable via
     the schema's `conventions.reference_arrow`; defaults to "→").
+
+    *id_pattern*, when given, is the (anchor-stripped) regex the target's
+    primary key is declared to match; it is used only by the strikethrough
+    fallback to recover an id from raw text using the schema's own id format
+    rather than a hard-coded convention.
     """
     # Walk the inline children of the paragraph inside the list item
     item = RefItem(raw=extract_text(node).strip())
@@ -209,9 +232,16 @@ def visit_list_item(node: ListItem, arrow: str = DEFAULT_REFERENCE_ARROW) -> Ref
                     item.ref = part.children.strip() if isinstance(part.children, str) else extract_text(part).strip()
 
     # Fallback: GFM strikethrough can swallow the arrow + `ref` when tildes are
-    # nearby, and extract_text strips backticks.  Try with and without backticks.
+    # nearby, and extract_text strips backticks.  Try with and without backticks,
+    # matching the id against the schema's declared id format when known so a
+    # non-kebab convention (snake_case, single-token, uppercase…) isn't silently
+    # dropped; degrade to a generic token if the pattern is absent or malformed.
     if item.ref is None:
-        ref_m = re.search(arrow_re + r"\s*`?([a-z0-9]+(?:-[a-z0-9]+)+)`?", item.raw)
+        body = id_pattern or GENERIC_ID_PATTERN
+        try:
+            ref_m = re.search(arrow_re + r"\s*`?(" + body + r")`?", item.raw)
+        except re.error:
+            ref_m = re.search(arrow_re + r"\s*`?(" + GENERIC_ID_PATTERN + r")`?", item.raw)
         if ref_m:
             item.ref = ref_m.group(1).strip()
 
@@ -226,9 +256,11 @@ def visit_list_item(node: ListItem, arrow: str = DEFAULT_REFERENCE_ARROW) -> Ref
     return item
 
 
-def visit_list(node: List, arrow: str = DEFAULT_REFERENCE_ARROW) -> list[RefItem]:
+def visit_list(node: List, arrow: str = DEFAULT_REFERENCE_ARROW,
+               id_pattern: str | None = None) -> list[RefItem]:
     """Extract all items from a bullet/ordered list."""
-    return [visit_list_item(item, arrow) for item in node.children if isinstance(item, ListItem)]
+    return [visit_list_item(item, arrow, id_pattern)
+            for item in node.children if isinstance(item, ListItem)]
 
 
 # ════════════════════════════════════════════════════════════
@@ -326,6 +358,30 @@ class SchemaValidator:
         target = self.ref_targets.get(ref_target) if ref_target else None
         if target and target[1]:
             self._check_value(ref, target[1], path)
+
+    def _id_pattern_for(self, ref_target: str | None) -> str | None:
+        """The (anchor-stripped) regex an id of *ref_target*'s primary key is
+        declared to match, or ``None`` if none is declarable.
+
+        Used by the ``visit_list_item`` strikethrough fallback so a mangled
+        reference is recovered using the schema's own id format rather than a
+        hard-coded one. Prefers the cross-document ``ref_targets`` table (precise
+        when ``ref:`` names a document type), and falls back to *this* schema's
+        primary key — which is what the table holds in single-file validation,
+        where it is not populated.
+        """
+        pk_defn = None
+        target = self.ref_targets.get(ref_target) if ref_target else None
+        if target:
+            pk_defn = target[1]
+        elif self._pk_defn:
+            pk_defn = self._pk_defn
+        if not pk_defn:
+            return None
+        type_def = self.value_types.get(pk_defn.get("type"))
+        if not type_def or "pattern" not in type_def:
+            return None
+        return _strip_anchors(type_def["pattern"])
 
     def _check_refs(self):
         """If known_ids was provided, check that refs resolve — and, when the
@@ -736,11 +792,14 @@ class SchemaValidator:
                 self._error(path, f"Expected at least {defn['min_items']} item(s)")
             return
 
-        items: list[RefItem] = []
-        for lst in lists:
-            items.extend(visit_list(lst, self.ref_arrow))
         style = defn.get("style", "unlabeled")
         ref_target = defn.get("ref")
+        # Derive the target's declared id format up front so the strikethrough
+        # fallback recovers ids in the schema's own convention, not a fixed one.
+        id_pattern = self._id_pattern_for(ref_target)
+        items: list[RefItem] = []
+        for lst in lists:
+            items.extend(visit_list(lst, self.ref_arrow, id_pattern))
 
         if style == "labeled":
             for expected in defn.get("items", []):

@@ -668,3 +668,65 @@ def test_strict_frontmatter_exempts_document_type():
     assert not any("document_type" in e.path for e in errors)
 
 
+# ── strikethrough id-recovery honours the schema's id format ──
+#
+# A GFM strikethrough span crossing the arrow defeats the AST ref extraction,
+# so visit_list_item falls back to a raw-text regex. That regex must use the
+# id format the *schema* declares (not a hard-coded convention), so a non-kebab
+# id isn't silently dropped — and an id that doesn't match the schema isn't
+# spuriously grabbed.
+
+def _first_ref(item_md, id_pattern=None):
+    from marko.block import List as MdList
+    from cartulary.validator import visit_list
+    _, _, sections = parse("# T\n\n## Friends\n\n" + item_md + "\n")
+    lst = next(n for n in sections[0].children if isinstance(n, MdList))
+    return visit_list(lst, "→", id_pattern)[0].ref
+
+
+def test_strikethrough_fallback_recovers_id_matching_schema_pattern():
+    assert _first_ref("- ~Frodo → `frodo_baggins`~", r"[a-z]+_[a-z]+") == "frodo_baggins"
+
+
+def test_strikethrough_fallback_rejects_id_not_matching_schema_pattern():
+    # Schema declares snake_case ids; a kebab id must not be recovered.
+    assert _first_ref("- ~Frodo → `frodo-baggins`~", r"[a-z]+_[a-z]+") is None
+
+
+def test_strikethrough_fallback_generic_floor_without_pattern():
+    # No declared pattern → permissive generic token (snake, kebab, single).
+    assert _first_ref("- ~Frodo → `frodo_baggins`~") == "frodo_baggins"
+    assert _first_ref("- ~Frodo → `frodo`~") == "frodo"
+
+
+def test_id_pattern_for_derives_anchorless_pattern_from_local_pk():
+    schema = {"value_types": {"snake_id": {"pattern": "^[a-z]+_[a-z]+$"}},
+              "frontmatter": {"fields": {"pid": {"type": "snake_id", "primary_key": True}}},
+              "sections": []}
+    assert SchemaValidator(schema)._id_pattern_for("pid") == "[a-z]+_[a-z]+"
+
+
+def test_snake_ids_reciprocate_through_strikethrough(tmp_path):
+    schema = {
+        "value_types": {"snake_id": {"pattern": "^[a-z]+_[a-z]+$"}},
+        "schemas": {
+            "person": {
+                "primary_key": "pid",
+                "frontmatter": {"fields": {
+                    "document_type": {"value": "person", "required": True},
+                    "pid": {"type": "snake_id", "required": True, "primary_key": True},
+                }},
+                "sections": [{"heading": "Friends",
+                              "content": {"type": "ref_list", "style": "unlabeled",
+                                          "ref": "person", "inverse": "Friends"}}],
+            }
+        },
+    }
+    sp = dump_schema(tmp_path, "s.yaml", schema)
+    a = write(tmp_path, "a.md",
+              "---\ndocument_type: person\npid: aa_one\n---\n\n# A\n\n## Friends\n\n- ~B → `bb_two`~\n")
+    b = write(tmp_path, "b.md",
+              "---\ndocument_type: person\npid: bb_two\n---\n\n# B\n\n## Friends\n\n- ~A → `aa_one`~\n")
+    results = validate_files(sp, [a, b])
+    flat = [f"[{e.path}] {e.message}" for errs in results.values() for e in errs]
+    assert flat == [], flat
