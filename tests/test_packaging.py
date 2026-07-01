@@ -69,3 +69,14 @@ def test_ci_workflow_guards_version_pin_drift():
     # fails the build instead of shipping.
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     assert "release.py --check" in text
+
+
+def test_pypi_publish_workflow_uses_tokenless_trusted_publishing():
+    text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    assert yaml.safe_load(text)  # parses
+    assert "pypa/gh-action-pypi-publish" in text
+    assert "id-token: write" in text          # OIDC — the trusted-publishing signal
+    # No long-lived credential should ever be committed.
+    low = text.lower()
+    assert "password:" not in low
+    assert "pypi_api_token" not in low and "secrets." not in low
