@@ -62,3 +62,10 @@ def test_ci_workflow_parses_and_runs_pytest():
     assert "pytest" in text
     # must parse as YAML
     assert yaml.safe_load(text)
+
+
+def test_ci_workflow_guards_version_pin_drift():
+    # CI must run the release drift check, so a version bump that forgets a pin
+    # fails the build instead of shipping.
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "release.py --check" in text
