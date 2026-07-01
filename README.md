@@ -269,7 +269,7 @@ PR that didn't touch them. Each finding's blast radius is also exposed as
 ```yaml
 repos:
   - repo: https://github.com/jdhorne/cartulary
-    rev: v0.1.0
+    rev: v0.1.1
     hooks:
       - id: cartulary
         args: [schema.yaml, docs/]   # your schema, then the corpus path(s)
@@ -291,7 +291,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdhorne/cartulary@v0.1.0
+      - uses: jdhorne/cartulary@v0.1.1
         with:
           schema: schema.yaml
           files: docs/
