@@ -1,5 +1,5 @@
-name: cartulary
-description: Validate a corpus of structured Markdown against a YAML schema, with cross-document referential integrity, and upload findings to code scanning.
+name: Cartulary Markdown Validator
+description: "Foreign keys for your Markdown docs: cross-document referential integrity, not just schema validation."
 branding:
   icon: check-circle
   color: blue
