@@ -5,6 +5,7 @@ from .validator import (
     validate_file,
     validate_files,
     validate_schema,
+    scope_to_changed,
     load_schema,
     SchemaValidator,
     ValidationError,

@@ -214,7 +214,44 @@ dangling half of the relationship that a frontmatter or link checker can't:
   the right document *type*), reciprocal (`inverse`) checks,
   duplicate-primary-key detection, and multi-schema routing by
   `document_type` over a shared key namespace.
+- **Blast-radius scoping** (`--changed`): validate the whole corpus but report
+  only the findings a set of changed files is responsible for — ideal for
+  gating a PR (see below).
 - Every finding is an `error` or `warning`; many rules let you pick.
+
+---
+
+## Validating a change against the whole corpus
+
+Referential integrity is a property of the **entire** graph, so cartulary
+always reads the whole corpus — there's no correct way to check one file in
+isolation. Two consequences trip people up:
+
+- Validating a **single file on its own** is not a cheaper subset of the work —
+  it's *wrong*. Its references to other documents look dangling (the id
+  namespace is just that one file), and one-sided links from elsewhere are
+  invisible. Always pass the whole corpus.
+- A problem you introduce by editing file **A** is often reported on a
+  **different** file **B**. Remove `bilbo` from his father's `Children` while
+  Bilbo still lists that father under `Parents`, and the *missing reciprocal* is
+  reported on the **father**, not on Bilbo — because the father is the side now
+  missing a link.
+
+That second point is why gating CI on "findings in the file I changed" would
+miss exactly the breakage that edit caused. `--changed` solves it by reporting
+every finding whose **blast radius** touches a changed file — including ones
+attributed to a counterpart — and nothing else:
+
+```bash
+# Validate the whole corpus, but only report (and fail on) findings that the
+# files changed in this PR are responsible for:
+cartulary schema.yaml docs/ --changed "$(git diff --name-only origin/main)"
+```
+
+The whole corpus is still validated; `--changed` only scopes the **output** and
+the **exit status**, so a repo with pre-existing findings elsewhere won't fail a
+PR that didn't touch them. Each finding's blast radius is also exposed as
+`caused_by` in `--json` output (and on `ValidationError`) for editor/CI use.
 
 ---
 

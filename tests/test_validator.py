@@ -16,7 +16,7 @@ import yaml
 from marko import Markdown
 from marko.ext.gfm import GFM
 
-from cartulary import validate_file, validate_files
+from cartulary import validate_file, validate_files, scope_to_changed
 from cartulary.validator import (
     SchemaValidator,
     load_schema,
@@ -730,3 +730,113 @@ def test_snake_ids_reciprocate_through_strikethrough(tmp_path):
     results = validate_files(sp, [a, b])
     flat = [f"[{e.path}] {e.message}" for errs in results.values() for e in errs]
     assert flat == [], flat
+
+
+# ── blast-radius provenance & --changed scoping ──────────────
+#
+# Cross-document findings are attributed to a counterpart, not the file that
+# caused them (a one-sided link edited into A is reported on B). caused_by
+# records the files a finding depends on so scope_to_changed can bound output
+# to what a set of changed files is responsible for.
+
+def _kin_schema(dir_):
+    return dump_schema(dir_, "s.yaml", {
+        "value_types": {"pid": {"pattern": "^[a-z]+$"}},
+        "schemas": {"person": {
+            "primary_key": "person_id",
+            "frontmatter": {"fields": {
+                "document_type": {"value": "person", "required": True},
+                "person_id": {"type": "pid", "required": True, "primary_key": True},
+                "name": {"required": True},
+            }},
+            "sections": [
+                {"heading": "Parents",
+                 "content": {"type": "ref_list", "style": "unlabeled", "ref": "person", "inverse": "Children"}},
+                {"heading": "Children",
+                 "content": {"type": "ref_list", "style": "unlabeled", "ref": "person", "inverse": "Parents"}},
+            ],
+        }},
+    })
+
+
+def _person(dir_, pid, parents_ref=None):
+    body = f"---\ndocument_type: person\nperson_id: {pid}\nname: {pid.title()}\n---\n\n# {pid}\n\n## Parents\n"
+    if parents_ref:
+        body += f"\n- Ref → `{parents_ref}`\n"
+    body += "\n## Children\n"
+    return write(dir_, f"{pid}.md", body)
+
+
+def _reciprocity_finding(results, host_name):
+    for fp, errs in results.items():
+        if Path(fp).name == host_name:
+            for e in errs:
+                if "reciprocal" in e.message.lower():
+                    return e
+    return None
+
+
+def test_reciprocity_finding_is_attributed_to_counterpart(tmp_path):
+    # alice lists bob as a parent; bob does not reciprocate.
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+    results = validate_files(sp, [alice, bob])
+    # The finding lands on bob.md, not alice.md ...
+    assert _reciprocity_finding(results, "alice.md") is None
+    finding = _reciprocity_finding(results, "bob.md")
+    assert finding is not None
+    # ... but its blast radius names both files.
+    assert finding.caused_by == {alice, bob}
+
+
+def test_scope_to_changed_surfaces_counterpart_finding(tmp_path):
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+    carol = _person(tmp_path, "carol")  # unrelated, clean-but-irrelevant
+    results = validate_files(sp, [alice, bob, carol])
+
+    # Editing alice must surface the finding reported on bob (alice caused it).
+    scoped = scope_to_changed(results, [alice])
+    assert bob in scoped and any("reciprocal" in e.message.lower() for e in scoped[bob])
+    # A changed file that touches nothing yields no findings.
+    assert scope_to_changed(results, [carol]) == {}
+
+
+def test_scope_to_changed_excludes_unrelated_preexisting_findings(tmp_path):
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+    # dave has an unrelated error (missing required `name`).
+    dave = write(tmp_path, "dave.md",
+                 "---\ndocument_type: person\nperson_id: dave\n---\n\n# dave\n\n## Parents\n\n## Children\n")
+    results = validate_files(sp, [alice, bob, dave])
+
+    scoped = scope_to_changed(results, [alice])
+    # dave's pre-existing error is out of alice's scope.
+    assert dave not in scoped
+    # dave's own change is in scope for dave.
+    assert dave in scope_to_changed(results, [dave])
+
+
+def test_duplicate_key_caused_by_all_colliding_files(tmp_path):
+    sp = _kin_schema(tmp_path)
+    a = write(tmp_path, "a.md", "---\ndocument_type: person\nperson_id: dup\nname: A\n---\n\n# a\n\n## Parents\n\n## Children\n")
+    b = write(tmp_path, "b.md", "---\ndocument_type: person\nperson_id: dup\nname: B\n---\n\n# b\n\n## Parents\n\n## Children\n")
+    results = validate_files(sp, [a, b])
+    dups = [e for errs in results.values() for e in errs if "Duplicate primary key" in e.message]
+    assert dups, "expected a duplicate-key finding"
+    assert all(e.caused_by == {a, b} for e in dups)
+    # Editing either colliding file surfaces the duplicate.
+    assert scope_to_changed(results, [a]) and scope_to_changed(results, [b])
+
+
+def test_scope_to_changed_matches_relative_and_absolute_paths(tmp_path):
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+    results = validate_files(sp, [alice, bob])
+    # Pass the changed file in a non-normalized form; it must still match.
+    messy = str(tmp_path / "." / "alice.md")
+    assert bob in scope_to_changed(results, [messy])

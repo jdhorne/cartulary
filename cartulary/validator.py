@@ -276,6 +276,12 @@ class ValidationError:
     path: str
     message: str
     severity: str = "error"
+    # Files whose content this finding depends on — its "blast radius". Always
+    # includes the file the finding is reported on; a cross-document finding
+    # (missing reciprocal, duplicate key) also includes the *other* files that
+    # cause it, so editing any of them is relevant. Populated by validate_files;
+    # empty for findings produced outside a corpus run.
+    caused_by: set[str] = field(default_factory=set)
 
 
 class SchemaValidator:
@@ -1053,6 +1059,8 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                     errors.append(ValidationError(
                         path=f"frontmatter.{pk_field}",
                         message=f"Duplicate primary key '{pk}' (also in: {', '.join(others)})",
+                        # The collision involves every file sharing this key.
+                        caused_by={fp, *duplicate_ids[pk]},
                     ))
 
                 ref_index[pk] = set()
@@ -1080,6 +1088,11 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
             continue
         for source_id, source_section, inverse_section in expectations:
             if (inverse_section, source_id) not in target_refs:
+                # Reported on the target, but *caused* by both sides: editing the
+                # source (drop the outbound link) or the target (add the back-link)
+                # would resolve it, so both files are in scope.
+                source_fp = id_to_file.get(source_id)
+                caused = {target_fp} | ({source_fp} if source_fp else set())
                 results[target_fp].append(ValidationError(
                     path=f"section[{inverse_section}]",
                     message=(
@@ -1088,9 +1101,43 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                         f"'{source_id}'"
                     ),
                     severity="warning",
+                    caused_by=caused,
                 ))
 
+    # Every finding is caused, at minimum, by the file it is reported on. This
+    # backfills the single-file case (structural/format findings) so blast-radius
+    # scoping (see scope_to_changed) can treat all findings uniformly.
+    for fp, errs in results.items():
+        for e in errs:
+            e.caused_by.add(fp)
+
     return results
+
+
+def scope_to_changed(results: dict[str, list[ValidationError]],
+                     changed: list[str]) -> dict[str, list[ValidationError]]:
+    """Restrict corpus *results* to the blast radius of the *changed* files.
+
+    A whole-corpus run must still happen — referential integrity is a property
+    of the entire graph, and a one-sided link introduced by editing one file is
+    reported on its *counterpart*, not on the edited file. This does not change
+    what was validated; it filters the findings to those any *changed* file is
+    responsible for, i.e. every finding whose ``caused_by`` set intersects the
+    changed set. Paths are compared resolved, so relative and absolute spellings
+    of the same file match. Files with no in-scope findings are dropped from the
+    returned mapping.
+    """
+    changed_resolved = {str(Path(c).resolve()) for c in changed}
+
+    def in_scope(err: ValidationError) -> bool:
+        return any(str(Path(f).resolve()) in changed_resolved for f in err.caused_by)
+
+    scoped: dict[str, list[ValidationError]] = {}
+    for fp, errs in results.items():
+        kept = [e for e in errs if in_scope(e)]
+        if kept:
+            scoped[fp] = kept
+    return scoped
 
 
 def load_schema(path: str | Path) -> dict:
@@ -1261,12 +1308,14 @@ def validate_schema(path_or_dict) -> list[ValidationError]:
 def results_to_json(results: dict[str, list[ValidationError]]) -> str:
     """Render validation results as a JSON array of findings.
 
-    Each finding is an object with ``file``, ``path``, ``message`` and
-    ``severity``. Clean files contribute nothing, so an empty array means
-    everything validated.
+    Each finding is an object with ``file``, ``path``, ``message``,
+    ``severity`` and ``caused_by`` (the files whose content the finding depends
+    on — its blast radius). Clean files contribute nothing, so an empty array
+    means everything validated.
     """
     findings = [
-        {"file": fp, "path": err.path, "message": err.message, "severity": err.severity}
+        {"file": fp, "path": err.path, "message": err.message,
+         "severity": err.severity, "caused_by": sorted(err.caused_by)}
         for fp, errors in results.items()
         for err in errors
     ]
@@ -1320,6 +1369,13 @@ def main():
     parser.add_argument("-q", "--quiet", action="store_true")
     parser.add_argument("--json", action="store_true",
                         help="Emit findings as a JSON array (for editors/CI)")
+    parser.add_argument("--changed", action="append", metavar="FILE",
+                        help="Report only findings in the blast radius of these "
+                             "file(s) — those any changed file is responsible for, "
+                             "including one-sided links reported on a counterpart. "
+                             "Still validates the whole corpus; only scopes output "
+                             "and exit status. Repeatable, or space/comma-separated "
+                             "(e.g. --changed \"$(git diff --name-only)\").")
     args = parser.parse_args()
 
     # Validate the schema itself first; bad schemas are a usage error.
@@ -1353,10 +1409,24 @@ def main():
     # Use cross-document validation when multiple files are provided
     results = validate_files(args.schema, valid_files)
 
+    # Blast-radius scoping: the whole corpus is still validated (integrity is a
+    # whole-graph property); --changed only narrows what is reported and gated on.
+    if args.changed:
+        changed = [p for group in args.changed for p in re.split(r"[,\s]+", group.strip()) if p]
+        corpus_resolved = {str(Path(f).resolve()) for f in valid_files}
+        for c in changed:
+            if str(Path(c).resolve()) not in corpus_resolved and not args.json:
+                print(f"  NOTE: --changed file is not in the validated set: {c}")
+        results = scope_to_changed(results, changed)
+
     if args.json:
         print(results_to_json(results))
         if any(e.severity == "error" for errs in results.values() for e in errs):
             exit_code = 1
+        sys.exit(exit_code)
+
+    if args.changed and not results:
+        print("\n  ✓ No findings in the changed scope\n")
         sys.exit(exit_code)
 
     for filepath, errors in results.items():
