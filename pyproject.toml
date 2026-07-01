@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cartulary"
 version = "0.1.0"
-description = "Schema validation for a corpus of structured Markdown — with cross-document referential integrity."
+description = "Foreign keys for your Markdown docs: cross-document referential integrity, not just schema validation."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

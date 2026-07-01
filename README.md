@@ -1,6 +1,6 @@
 # cartulary
 
-**Schema validation for a *corpus* of structured Markdown — with foreign keys.**
+**Foreign keys for your Markdown docs: cross-document referential integrity, not just schema validation.**
 
 `cartulary` validates a folder of Markdown files against a declarative YAML
 schema. Plenty of tools check one file's frontmatter or heading structure;
