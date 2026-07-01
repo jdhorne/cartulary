@@ -105,7 +105,9 @@ verify reciprocity.
 ## Install
 
 ```bash
-pip install -e .          # from a clone
+pip install cartulary     # from PyPI
+
+pip install -e .          # or, from a clone (for development)
 # runtime deps: marko, PyYAML
 ```
 
