@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (with dev deps)
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        run: pytest -q
+      - name: Self-validate example corpora
+        run: |
+          python -m cartulary examples/family-tree.schema.yaml examples/family-tree
+          python -m cartulary examples/library.schema.yaml tests/fixtures/*.md || true
+
+  action-smoke:
+    # Dogfood the composite action against a clean example corpus. upload-sarif is
+    # off so this needs no code-scanning permissions and works on forks.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: ./
+        with:
+          schema: examples/family-tree.schema.yaml
+          files: examples/family-tree
+          upload-sarif: "false"

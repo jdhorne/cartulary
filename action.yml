@@ -1,0 +1,71 @@
+name: cartulary
+description: Validate a corpus of structured Markdown against a YAML schema, with cross-document referential integrity, and upload findings to code scanning.
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  schema:
+    description: Path to the cartulary schema YAML file.
+    required: true
+  files:
+    description: Files or directories to validate (space-separated). Directories are walked recursively. Defaults to the repo root.
+    required: false
+    default: "."
+  changed:
+    description: >-
+      Optional. Restrict reported findings to the blast radius of these files
+      (space/comma-separated) — e.g. the files changed in a PR. The whole corpus
+      is still validated; only the output and exit status are scoped.
+    required: false
+    default: ""
+  sarif-file:
+    description: Path to write the SARIF report to.
+    required: false
+    default: cartulary.sarif
+  upload-sarif:
+    description: "Whether to upload the SARIF report to GitHub code scanning (needs `security-events: write`)."
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install cartulary
+      shell: bash
+      # Install from the action's own checkout, so no PyPI release is required.
+      run: pip install "${{ github.action_path }}"
+
+    - name: Validate corpus
+      id: validate
+      shell: bash
+      # Inputs are passed via env (not interpolated into the script) to avoid
+      # command injection. FILES is intentionally unquoted to allow several paths.
+      env:
+        SCHEMA: ${{ inputs.schema }}
+        FILES: ${{ inputs.files }}
+        CHANGED: ${{ inputs.changed }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+      run: |
+        set +e
+        ARGS=(--sarif "$SCHEMA" $FILES)
+        if [ -n "$CHANGED" ]; then ARGS+=(--changed "$CHANGED"); fi
+        cartulary "${ARGS[@]}" > "$SARIF_FILE"
+        echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to code scanning
+      if: ${{ inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+
+    - name: Fail on validation errors
+      shell: bash
+      env:
+        CODE: ${{ steps.validate.outputs.exit_code }}
+      run: |
+        if [ "$CODE" != "0" ]; then
+          echo "::error::cartulary reported errors (exit $CODE); see the code-scanning results."
+          exit 1
+        fi
+        echo "cartulary: no errors."

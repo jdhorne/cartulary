@@ -262,6 +262,49 @@ PR that didn't touch them. Each finding's blast radius is also exposed as
 
 ---
 
+## CI & pre-commit
+
+**pre-commit.** cartulary ships a hook. In your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/jdhorne/cartulary
+    rev: v0.1.0
+    hooks:
+      - id: cartulary
+        args: [schema.yaml, docs/]   # your schema, then the corpus path(s)
+```
+
+The hook validates the **whole corpus** (not just the staged files — referential
+integrity is a whole-graph property), and runs whenever a Markdown or YAML file
+changes.
+
+**GitHub Action.** A composite action runs cartulary and uploads findings to
+**code scanning**, so they render inline on the PR diff:
+
+```yaml
+# .github/workflows/cartulary.yml
+permissions:
+  security-events: write        # required for the SARIF upload
+jobs:
+  cartulary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdhorne/cartulary@v0.1.0
+        with:
+          schema: schema.yaml
+          files: docs/
+          # optional: only fail on / report findings the PR is responsible for
+          changed: ${{ github.event_name == 'pull_request' && 'docs/' || '' }}
+```
+
+The action installs cartulary from its own checkout (no PyPI release needed),
+emits SARIF, uploads it, and fails the job if any **error**-level finding is in
+scope. Set `upload-sarif: "false"` to skip the upload (e.g. on forks).
+
+---
+
 ## Specification & conformance
 
 cartulary is a **specification**, and this Python package is its **reference

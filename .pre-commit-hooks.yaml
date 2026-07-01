@@ -1,0 +1,24 @@
+# pre-commit hook definitions for cartulary.
+#
+# Consumers add this to their .pre-commit-config.yaml:
+#
+#   repos:
+#     - repo: https://github.com/jdhorne/cartulary
+#       rev: v0.1.0
+#       hooks:
+#         - id: cartulary
+#           args: [schema.yaml, docs/]   # your schema, then the corpus path(s)
+#
+# The hook validates the WHOLE corpus (referential integrity is a whole-graph
+# property — validating only the changed files gives wrong results), so it does
+# not receive pre-commit's changed-file list. It still only *runs* when a
+# Markdown or YAML file changed. To scope the *report* to changed files while
+# still validating everything, add `--changed` to args and pass the paths.
+- id: cartulary
+  name: cartulary (validate Markdown corpus)
+  description: Validate a corpus of structured Markdown against a YAML schema, with cross-document referential integrity.
+  entry: cartulary
+  language: python
+  pass_filenames: false
+  files: \.(md|markdown|ya?ml)$
+  require_serial: true
