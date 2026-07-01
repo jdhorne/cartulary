@@ -276,6 +276,10 @@ class ValidationError:
     path: str
     message: str
     severity: str = "error"
+    # Stable machine identity for the *kind* of finding (e.g. "unresolved-reference").
+    # Message wording may drift; the rule id is the durable handle used by --sarif
+    # (as SARIF ruleId) and available for per-rule config/suppression. See RULES.
+    rule: str = ""
     # Files whose content this finding depends on — its "blast radius". Always
     # includes the file the finding is reported on; a cross-document finding
     # (missing reciprocal, duplicate key) also includes the *other* files that
@@ -341,7 +345,8 @@ class SchemaValidator:
             stem = Path(filepath).stem
             field_val = frontmatter.get(match_field, "")
             if stem != field_val:
-                self._error("filename", f"Filename '{stem}' does not match {match_field} '{field_val}'")
+                self._error("filename", f"Filename '{stem}' does not match {match_field} '{field_val}'",
+                            rule="filename-mismatch")
 
         self._check_frontmatter(frontmatter)
         self._check_title(title, frontmatter)
@@ -349,8 +354,9 @@ class SchemaValidator:
         self._check_refs()
         return self.errors
 
-    def _error(self, path: str, message: str, severity: str = "error"):
-        self.errors.append(ValidationError(path=path, message=message, severity=severity))
+    def _error(self, path: str, message: str, severity: str = "error", rule: str = ""):
+        self.errors.append(ValidationError(path=path, message=message,
+                                           severity=severity, rule=rule))
 
     # ── Cross-document ref checking ──────────────────────
 
@@ -398,7 +404,7 @@ class SchemaValidator:
             return
         for path, ref, ref_target in self.refs_found:
             if ref not in self.known_ids:
-                self._error(path, f"Unresolved reference: '{ref}'")
+                self._error(path, f"Unresolved reference: '{ref}'", rule="unresolved-reference")
                 continue
             target = self.ref_targets.get(ref_target) if ref_target else None
             expected = target[0] if target else None
@@ -406,7 +412,8 @@ class SchemaValidator:
             if expected and actual and actual not in expected:
                 want = ", ".join(sorted(expected))
                 self._error(path, f"Reference '{ref}' resolves to a "
-                                  f"'{actual}' document, but a '{want}' was expected")
+                                  f"'{actual}' document, but a '{want}' was expected",
+                            rule="reference-type")
 
     # ── Frontmatter ──────────────────────────────────────
 
@@ -422,12 +429,14 @@ class SchemaValidator:
                 if name in fields or name == "document_type":
                     continue
                 severity = "warning" if additional == "warn" else "error"
-                self._error(f"frontmatter.{name}", f"Unknown field '{name}'", severity=severity)
+                self._error(f"frontmatter.{name}", f"Unknown field '{name}'",
+                            severity=severity, rule="unknown-field")
 
         for name, defn in fields.items():
             value = fm.get(name)
             if defn.get("required") and (value is None or value == ""):
-                self._error(f"frontmatter.{name}", f"Required field '{name}' is missing")
+                self._error(f"frontmatter.{name}", f"Required field '{name}' is missing",
+                            rule="required-field")
                 continue
             if value is not None:
                 # Handle list-valued fields (e.g. persons)
@@ -466,7 +475,7 @@ class SchemaValidator:
                 if self._option_matches(item, opt):
                     self._validate_against_option(item, opt, path)
                     return
-            self._error(path, f"Item does not match any_of options")
+            self._error(path, f"Item does not match any_of options", rule="type-mismatch")
             return
 
         if items_def.get("type") == "object":
@@ -490,14 +499,16 @@ class SchemaValidator:
     def _validate_object_item(self, item, item_def: dict, path: str):
         """Validate a dict item against an object spec with named sub-fields."""
         if not isinstance(item, dict):
-            self._error(path, f"Expected object (dict), got {type(item).__name__}")
+            self._error(path, f"Expected object (dict), got {type(item).__name__}",
+                        rule="type-mismatch")
             return
         sub_fields = item_def.get("fields", {})
         for fname, fdef in sub_fields.items():
             fval = item.get(fname)
             sub_path = f"{path}.{fname}"
             if fdef.get("required") and (fval is None or fval == ""):
-                self._error(sub_path, f"Required field '{fname}' is missing")
+                self._error(sub_path, f"Required field '{fname}' is missing",
+                            rule="required-field")
                 continue
             if fval is None:
                 continue
@@ -525,7 +536,7 @@ class SchemaValidator:
 
     def _value_passes(self, value: str, defn: dict) -> bool:
         """Pure shape check, no errors written — used for any_of option probing."""
-        ok, _ = self._evaluate_value(value, defn)
+        ok, _, _ = self._evaluate_value(value, defn)
         return ok
 
     # ── Title ────────────────────────────────────────────
@@ -535,7 +546,7 @@ class SchemaValidator:
         if not pattern:
             return
         if title is None:
-            self._error("title", "Missing H1 title")
+            self._error("title", "Missing H1 title", rule="title-missing")
             return
         # Build expected title by substituting {field} placeholders.
         # Also build a regex that allows optional '~' before date-like values
@@ -554,56 +565,58 @@ class SchemaValidator:
         regex_parts.append(re.escape(pattern[last_end:]))
         title_re = "^" + "".join(regex_parts) + "$"
         if not re.match(title_re, title):
-            self._error("title", f"Title '{title}' does not match expected '{expected}'")
+            self._error("title", f"Title '{title}' does not match expected '{expected}'",
+                        rule="title-mismatch")
 
     # ── Value checking ───────────────────────────────────
 
-    def _evaluate_value(self, value: str, defn: dict) -> tuple[bool, str | None]:
+    def _evaluate_value(self, value: str, defn: dict) -> tuple[bool, str | None, str]:
         """Match *value* against a field/value_type definition.
 
-        Pure: performs no I/O and writes no errors. Returns ``(ok, message)``
-        where ``message`` is the finding text on failure and ``None`` on success.
-        This is the single source of truth for value/enum/type matching, shared
-        by :meth:`_check_value` (which emits the message) and :meth:`_value_passes`
-        (which only needs the boolean, for any_of option probing). The on-disk
-        ``exists`` check lives in ``_check_value`` instead — it has a side effect
-        and its own severity, so it is not part of the pure match.
+        Pure: performs no I/O and writes no errors. Returns ``(ok, message, rule)``
+        where ``message`` is the finding text and ``rule`` its taxonomy id on
+        failure (both empty/None on success). This is the single source of truth
+        for value/enum/type matching, shared by :meth:`_check_value` (which emits)
+        and :meth:`_value_passes` (which only needs the boolean, for any_of option
+        probing). The on-disk ``exists`` check lives in ``_check_value`` instead —
+        it has a side effect and its own severity, so it is not part of the pure
+        match.
         """
         if "value" in defn:
             if value != str(defn["value"]):
-                return False, f"'{value}' must be '{defn['value']}'"
-            return True, None
+                return False, f"'{value}' must be '{defn['value']}'", "value-mismatch"
+            return True, None, ""
         if "enum" in defn:
             if value not in [str(v) for v in defn["enum"]]:
-                return False, f"'{value}' not in {defn['enum']}"
-            return True, None
+                return False, f"'{value}' not in {defn['enum']}", "enum-mismatch"
+            return True, None, ""
 
         type_name = defn.get("type")
         if not type_name or type_name == "string":
-            return True, None
+            return True, None, ""
         type_def = self.value_types.get(type_name)
         if not type_def:
-            return True, None
+            return True, None, ""
 
         if "pattern" in type_def:
             if not re.match(type_def["pattern"], value):
                 desc = type_def.get("description", type_def["pattern"])
-                return False, f"'{value}' doesn't match type '{type_name}' ({desc})"
-            return True, None
+                return False, f"'{value}' doesn't match type '{type_name}' ({desc})", "type-mismatch"
+            return True, None, ""
         if "enum" in type_def:
             if value not in [str(v) for v in type_def["enum"]]:
-                return False, f"'{value}' not in {type_name} values {type_def['enum']}"
-            return True, None
+                return False, f"'{value}' not in {type_name} values {type_def['enum']}", "enum-mismatch"
+            return True, None, ""
         if "any_of" in type_def:
             if not self._matches_any_of(value, type_def["any_of"]):
-                return False, f"'{value}' doesn't match any option for type '{type_name}'"
-            return True, None
-        return True, None
+                return False, f"'{value}' doesn't match any option for type '{type_name}'", "type-mismatch"
+            return True, None, ""
+        return True, None, ""
 
     def _check_value(self, value: str, defn: dict, path: str):
-        ok, message = self._evaluate_value(value, defn)
+        ok, message, rule = self._evaluate_value(value, defn)
         if not ok:
-            self._error(path, message)
+            self._error(path, message, rule=rule)
             return
 
         # On-disk existence check for `exists` value_types. Applies only to
@@ -627,7 +640,8 @@ class SchemaValidator:
             )
             if not found:
                 severity = exists_def.get("severity", "warning")
-                self._error(path, f"File not found: {value}", severity=severity)
+                self._error(path, f"File not found: {value}", severity=severity,
+                            rule="file-not-found")
 
     def _matches_any_of(self, value: str, options: list[dict]) -> bool:
         for opt in options:
@@ -651,24 +665,28 @@ class SchemaValidator:
             req = ss.get("required")
             if req and ss["heading"] not in doc_headings:
                 severity = "warning" if req == "warn" else "error"
-                self._error("sections", f"Required section '{ss['heading']}' is missing", severity=severity)
+                self._error("sections", f"Required section '{ss['heading']}' is missing",
+                            severity=severity, rule="required-section")
 
         # Deprecated sections
         for ss in schema_sections:
             if ss.get("deprecated") and ss["heading"] in doc_headings:
-                self._error(f"section[{ss['heading']}]", "Deprecated section — should be removed", severity="warning")
+                self._error(f"section[{ss['heading']}]", "Deprecated section — should be removed",
+                            severity="warning", rule="deprecated-section")
 
         # Ordering
         doc_known = [h for h in doc_headings if h in schema_order]
         expected = [h for h in schema_order if h in doc_known]
         if doc_known != expected:
-            self._error("sections", f"Section order: got {doc_known}, expected {expected}")
+            self._error("sections", f"Section order: got {doc_known}, expected {expected}",
+                        rule="section-order")
 
         # Position: last
         for ss in schema_sections:
             if ss.get("position") == "last" and ss["heading"] in doc_headings:
                 if doc_headings[-1] != ss["heading"]:
-                    self._error(f"section[{ss['heading']}]", f"Must be the last section")
+                    self._error(f"section[{ss['heading']}]", f"Must be the last section",
+                                rule="section-position")
 
         # Unknown sections
         additional = self.schema.get("additional_sections", False)
@@ -676,9 +694,10 @@ class SchemaValidator:
         for heading in doc_headings:
             if heading not in schema_set:
                 if additional == "warn":
-                    self._error("sections", f"Unknown section '{heading}'", severity="warning")
+                    self._error("sections", f"Unknown section '{heading}'",
+                                severity="warning", rule="unknown-section")
                 elif not additional:
-                    self._error("sections", f"Unknown section '{heading}'")
+                    self._error("sections", f"Unknown section '{heading}'", rule="unknown-section")
 
         # Content and subsection validation per section
         for section in doc_sections:
@@ -701,18 +720,21 @@ class SchemaValidator:
             req = ss.get("required")
             if req and ss["heading"] not in sub_headings:
                 severity = "warning" if req == "warn" else "error"
-                self._error(path, f"Required subsection '{ss['heading']}' is missing", severity=severity)
+                self._error(path, f"Required subsection '{ss['heading']}' is missing",
+                            severity=severity, rule="required-section")
 
         # Deprecated subsections
         for ss in sub_schemas:
             if ss.get("deprecated") and ss["heading"] in sub_headings:
-                self._error(path, f"Deprecated subsection '{ss['heading']}' — should be removed", severity="warning")
+                self._error(path, f"Deprecated subsection '{ss['heading']}' — should be removed",
+                            severity="warning", rule="deprecated-section")
 
         # Ordering (among known subsections)
         doc_known = [h for h in sub_headings if h in schema_sub_order]
         expected = [h for h in schema_sub_order if h in doc_known]
         if doc_known != expected:
-            self._error(path, f"Subsection order: got {doc_known}, expected {expected}")
+            self._error(path, f"Subsection order: got {doc_known}, expected {expected}",
+                        rule="section-order")
 
         # Unknown subsections: per-section override, then document-level, default false.
         # Prose sections without explicit subsection schemas default to allowing them.
@@ -726,9 +748,10 @@ class SchemaValidator:
         for heading in sub_headings:
             if heading not in schema_sub_set:
                 if additional == "warn":
-                    self._error(path, f"Unknown subsection '{heading}'", severity="warning")
+                    self._error(path, f"Unknown subsection '{heading}'",
+                                severity="warning", rule="unknown-section")
                 elif not additional:
-                    self._error(path, f"Unknown subsection '{heading}'")
+                    self._error(path, f"Unknown subsection '{heading}'", rule="unknown-section")
 
         # Content validation per subsection
         for sub in section.subsections:
@@ -760,7 +783,8 @@ class SchemaValidator:
         tables = [n for n in section.children if isinstance(n, Table)]
         if not tables:
             if defn.get("min_rows", 0) > 0:
-                self._error(path, f"Expected a table with at least {defn['min_rows']} row(s)")
+                self._error(path, f"Expected a table with at least {defn['min_rows']} row(s)",
+                            rule="table-missing")
             return
 
         expected_cols = list(defn.get("columns", {}).keys())
@@ -773,7 +797,8 @@ class SchemaValidator:
             tpath = f"{path}.table[{table_idx}]" if len(tables) > 1 else path
 
             if td.columns != expected_cols:
-                self._error(tpath, f"Columns {td.columns} don't match expected {expected_cols}")
+                self._error(tpath, f"Columns {td.columns} don't match expected {expected_cols}",
+                            rule="table-columns")
 
             total_rows += len(td.rows)
 
@@ -784,9 +809,10 @@ class SchemaValidator:
                     nullable = col_def.get("nullable", False)
                     if not value or value in ("—", "-", "–"):
                         if nullable == "warn":
-                            self._error(cell_path, "Empty but not nullable", severity="warning")
+                            self._error(cell_path, "Empty but not nullable",
+                                        severity="warning", rule="cell-empty")
                         elif not nullable:
-                            self._error(cell_path, "Empty but not nullable")
+                            self._error(cell_path, "Empty but not nullable", rule="cell-empty")
                         continue
                     self._check_value(value, col_def, cell_path)
                     if col_def.get("ref"):
@@ -794,7 +820,8 @@ class SchemaValidator:
                                           ref_target=col_def["ref"])
 
         if total_rows < min_rows:
-            self._error(path, f"Table(s) have {total_rows} row(s), need at least {min_rows}")
+            self._error(path, f"Table(s) have {total_rows} row(s), need at least {min_rows}",
+                        rule="table-min-rows")
 
     # ── Reference list content ───────────────────────────
 
@@ -802,9 +829,11 @@ class SchemaValidator:
         lists = [n for n in section.children if isinstance(n, List)]
         if not lists:
             if defn.get("style") == "labeled":
-                self._error(path, "Expected a reference list but none found")
+                self._error(path, "Expected a reference list but none found",
+                            rule="ref-list-missing")
             elif defn.get("min_items", 0) > 0:
-                self._error(path, f"Expected at least {defn['min_items']} item(s)")
+                self._error(path, f"Expected at least {defn['min_items']} item(s)",
+                            rule="ref-cardinality")
             return
 
         style = defn.get("style", "unlabeled")
@@ -821,7 +850,8 @@ class SchemaValidator:
                 label = expected["label"]
                 matching = [it for it in items if it.label == label]
                 if not matching:
-                    self._error(f"{path}.{label}", f"Missing required item '{label}'")
+                    self._error(f"{path}.{label}", f"Missing required item '{label}'",
+                                rule="ref-item-missing")
                     continue
                 item = matching[0]
                 if item.ref is not None:
@@ -834,16 +864,18 @@ class SchemaValidator:
                     if item.name not in self.unknown_literals:
                         self._error(f"{path}.{label}",
                                     f"No cross-reference and not marked Unknown",
-                                    severity="warning")
+                                    severity="warning", rule="ref-missing")
 
         elif style == "unlabeled":
             real = [it for it in items if it.raw.strip() not in self.unknown_literals]
             min_items = defn.get("min_items", 0)
             max_items = defn.get("max_items")
             if len(real) < min_items:
-                self._error(path, f"Need at least {min_items} item(s), found {len(real)}")
+                self._error(path, f"Need at least {min_items} item(s), found {len(real)}",
+                            rule="ref-cardinality")
             if max_items is not None and len(real) > max_items:
-                self._error(path, f"At most {max_items} item(s) allowed, found {len(real)}")
+                self._error(path, f"At most {max_items} item(s) allowed, found {len(real)}",
+                            rule="ref-cardinality")
             inverse = defn.get("inverse")
             for item in real:
                 if item.ref is not None:
@@ -860,13 +892,13 @@ class SchemaValidator:
             return
         lists = [n for n in section.children if isinstance(n, List)]
         if not lists:
-            self._error(path, "Expected a log list but none found")
+            self._error(path, "Expected a log list but none found", rule="log-missing")
             return
         items = visit_list(lists[0])
         for idx, item in enumerate(items):
             if not re.match(pattern, item.raw):
                 self._error(f"{path}.entry[{idx}]",
-                            f"Doesn't match log format: '{item.raw}'")
+                            f"Doesn't match log format: '{item.raw}'", rule="log-format")
 
 
 # ════════════════════════════════════════════════════════════
@@ -918,7 +950,8 @@ def validate_file(schema_path: str, filepath: str) -> list[ValidationError]:
         frontmatter, title, sections = _parse_file(filepath)
     except FrontmatterError as e:
         return [ValidationError(path="frontmatter",
-                                message=f"Invalid YAML frontmatter: {e.detail}")]
+                                message=f"Invalid YAML frontmatter: {e.detail}",
+                                rule="invalid-frontmatter")]
     if loaded.get("_multi"):
         dt = frontmatter.get("document_type")
         schema = loaded["schemas"].get(str(dt)) if dt else None
@@ -926,6 +959,7 @@ def validate_file(schema_path: str, filepath: str) -> list[ValidationError]:
             return [ValidationError(
                 path="frontmatter.document_type",
                 message=f"Unknown or missing document_type '{dt}'",
+                rule="document-type",
             )]
     else:
         schema = loaded
@@ -1001,6 +1035,7 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
             results[fp] = [ValidationError(
                 path="frontmatter",
                 message=f"Invalid YAML frontmatter: {e.detail}",
+                rule="invalid-frontmatter",
             )]
             continue
 
@@ -1011,6 +1046,7 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                 results[fp] = [ValidationError(
                     path="frontmatter.document_type",
                     message="Missing 'document_type' field (required for multi-schema validation)",
+                    rule="document-type",
                 )]
                 continue
             dt = str(dt)
@@ -1019,6 +1055,7 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                 results[fp] = [ValidationError(
                     path="frontmatter.document_type",
                     message=f"Unknown document_type '{dt}' (expected one of: {', '.join(schemas.keys())})",
+                    rule="document-type",
                 )]
                 continue
         else:
@@ -1059,6 +1096,7 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                     errors.append(ValidationError(
                         path=f"frontmatter.{pk_field}",
                         message=f"Duplicate primary key '{pk}' (also in: {', '.join(others)})",
+                        rule="duplicate-key",
                         # The collision involves every file sharing this key.
                         caused_by={fp, *duplicate_ids[pk]},
                     ))
@@ -1101,6 +1139,7 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                         f"'{source_id}'"
                     ),
                     severity="warning",
+                    rule="missing-reciprocal",
                     caused_by=caused,
                 ))
 
@@ -1302,6 +1341,103 @@ def validate_schema(path_or_dict) -> list[ValidationError]:
 
 
 # ════════════════════════════════════════════════════════════
+# Finding taxonomy & SARIF
+#
+# Every document finding carries a stable ``rule`` id (see ValidationError).
+# RULES maps each id to a human name + one-line description, used to populate a
+# SARIF run's ``tool.driver.rules``. This is the machine-stable identity of a
+# finding *kind*, distinct from its (drifting) message wording.
+# ════════════════════════════════════════════════════════════
+
+RULES: dict[str, tuple[str, str]] = {
+    "filename-mismatch":    ("FilenameMismatch", "Filename does not match the field required by filename_must_match."),
+    "required-field":       ("RequiredField", "A required frontmatter field (or object sub-field) is missing."),
+    "unknown-field":        ("UnknownField", "A frontmatter field not declared in the schema (additional_fields)."),
+    "value-mismatch":       ("ValueMismatch", "A value does not equal the required literal."),
+    "enum-mismatch":        ("EnumMismatch", "A value is not one of the allowed enum options."),
+    "type-mismatch":        ("TypeMismatch", "A value does not satisfy its declared value_type or item shape."),
+    "file-not-found":       ("FileNotFound", "A value with an `exists` value_type points at a missing file."),
+    "title-missing":        ("TitleMissing", "The document has no H1 title where one is required."),
+    "title-mismatch":       ("TitleMismatch", "The H1 title does not match title_pattern."),
+    "required-section":     ("RequiredSection", "A required section or subsection is missing."),
+    "deprecated-section":   ("DeprecatedSection", "A section or subsection marked deprecated is present."),
+    "section-order":        ("SectionOrder", "Sections or subsections are out of the schema's declared order."),
+    "section-position":     ("SectionPosition", "A section constrained to `position: last` is not last."),
+    "unknown-section":      ("UnknownSection", "A section or subsection not declared in the schema."),
+    "table-missing":        ("TableMissing", "A required table is absent."),
+    "table-columns":        ("TableColumns", "A table's columns do not match the declared columns."),
+    "table-min-rows":       ("TableMinRows", "A table has fewer rows than min_rows."),
+    "cell-empty":           ("CellEmpty", "A non-nullable table cell is empty."),
+    "ref-list-missing":     ("RefListMissing", "A required reference list is absent."),
+    "ref-item-missing":     ("RefItemMissing", "A required labeled reference-list item is missing."),
+    "ref-missing":          ("RefMissing", "A labeled slot has no cross-reference and is not marked Unknown."),
+    "ref-cardinality":      ("RefCardinality", "A reference list violates its min_items/max_items."),
+    "log-missing":          ("LogMissing", "A required log list is absent."),
+    "log-format":           ("LogFormat", "A log entry does not match entry_pattern."),
+    "unresolved-reference": ("UnresolvedReference", "A ref does not resolve to any known primary key."),
+    "reference-type":       ("ReferenceType", "A ref resolves to a document of the wrong type."),
+    "duplicate-key":        ("DuplicateKey", "A primary key is used by more than one document."),
+    "missing-reciprocal":   ("MissingReciprocal", "A referenced document does not link back via its inverse section."),
+    "invalid-frontmatter":  ("InvalidFrontmatter", "The YAML frontmatter block failed to parse."),
+    "document-type":        ("DocumentType", "The document_type field is missing or unknown."),
+}
+
+SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
+
+
+def results_to_sarif(results: dict[str, list[ValidationError]],
+                     tool_uri: str = "https://pypi.org/project/cartulary/") -> str:
+    """Render validation results as a SARIF 2.1.0 log.
+
+    Each finding becomes a ``result`` whose ``ruleId`` is the finding's stable
+    rule id, ``level`` maps from severity (error/warning), the host file is the
+    ``physicalLocation`` and the structural ``path`` is preserved as a
+    ``logicalLocation`` (cartulary locates by structure, not line number, so no
+    ``region`` is emitted). Only the rules that actually fired are declared in
+    ``tool.driver.rules``. GitHub code scanning and SARIF-aware editors ingest
+    this directly.
+    """
+    findings = [(fp, e) for fp, errs in results.items() for e in errs]
+
+    used_ids: list[str] = []
+    for _fp, e in findings:
+        rid = e.rule or "unspecified"
+        if rid not in used_ids:
+            used_ids.append(rid)
+
+    rules = []
+    for rid in used_ids:
+        name, desc = RULES.get(rid, ("Unspecified", "An unclassified finding."))
+        rules.append({"id": rid, "name": name, "shortDescription": {"text": desc}})
+
+    sarif_results = []
+    for fp, e in findings:
+        sarif_results.append({
+            "ruleId": e.rule or "unspecified",
+            "level": "error" if e.severity == "error" else "warning",
+            "message": {"text": e.message},
+            "locations": [{
+                "physicalLocation": {"artifactLocation": {"uri": fp}},
+                "logicalLocations": [{"fullyQualifiedName": e.path}],
+            }],
+        })
+
+    doc = {
+        "$schema": SARIF_SCHEMA,
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {
+                "name": "cartulary",
+                "informationUri": tool_uri,
+                "rules": rules,
+            }},
+            "results": sarif_results,
+        }],
+    }
+    return json.dumps(doc, indent=2)
+
+
+# ════════════════════════════════════════════════════════════
 # CLI
 # ════════════════════════════════════════════════════════════
 
@@ -1369,6 +1505,9 @@ def main():
     parser.add_argument("-q", "--quiet", action="store_true")
     parser.add_argument("--json", action="store_true",
                         help="Emit findings as a JSON array (for editors/CI)")
+    parser.add_argument("--sarif", action="store_true",
+                        help="Emit findings as SARIF 2.1.0 (for GitHub code scanning "
+                             "/ SARIF-aware editors)")
     parser.add_argument("--changed", action="append", metavar="FILE",
                         help="Report only findings in the blast radius of these "
                              "file(s) — those any changed file is responsible for, "
@@ -1378,16 +1517,21 @@ def main():
                              "(e.g. --changed \"$(git diff --name-only)\").")
     args = parser.parse_args()
 
+    # --json and --sarif are machine-output modes; both suppress the human report.
+    machine = args.json or args.sarif
+
     # Validate the schema itself first; bad schemas are a usage error.
     schema_findings = validate_schema(args.schema)
     schema_errors = [f for f in schema_findings if f.severity == "error"]
-    if schema_findings and not args.json:
+    if schema_findings and not machine:
         print(f"\n  schema: {args.schema}")
         for f in schema_findings:
             icon = "✗" if f.severity == "error" else "⚠"
             print(f"  {icon} [{f.path}] {f.message}")
     if schema_errors:
-        if args.json:
+        if args.sarif:
+            print(results_to_sarif({args.schema: schema_findings}))
+        elif args.json:
             print(json.dumps([
                 {"file": args.schema, "path": f.path, "message": f.message,
                  "severity": f.severity} for f in schema_findings], indent=2))
@@ -1397,12 +1541,14 @@ def main():
     exit_code = 0
     valid_files, missing = _expand_paths(args.files)
     for filepath in missing:
-        if not args.json:
+        if not machine:
             print(f"  ERROR: File not found: {filepath}")
         exit_code = 1
 
     if not valid_files:
-        if args.json:
+        if args.sarif:
+            print(results_to_sarif({}))
+        elif args.json:
             print("[]")
         sys.exit(exit_code)
 
@@ -1415,12 +1561,12 @@ def main():
         changed = [p for group in args.changed for p in re.split(r"[,\s]+", group.strip()) if p]
         corpus_resolved = {str(Path(f).resolve()) for f in valid_files}
         for c in changed:
-            if str(Path(c).resolve()) not in corpus_resolved and not args.json:
+            if str(Path(c).resolve()) not in corpus_resolved and not machine:
                 print(f"  NOTE: --changed file is not in the validated set: {c}")
         results = scope_to_changed(results, changed)
 
-    if args.json:
-        print(results_to_json(results))
+    if machine:
+        print(results_to_sarif(results) if args.sarif else results_to_json(results))
         if any(e.severity == "error" for errs in results.values() for e in errs):
             exit_code = 1
         sys.exit(exit_code)

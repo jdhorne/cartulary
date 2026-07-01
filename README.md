@@ -120,6 +120,9 @@ cartulary examples/library.schema.yaml tests/fixtures/*.md
 
 # machine-readable output for editors / CI
 cartulary --json examples/library.schema.yaml docs/**/*.md
+
+# SARIF 2.1.0 for GitHub code scanning (renders findings on the PR diff)
+cartulary --sarif examples/library.schema.yaml docs/**/*.md > cartulary.sarif
 ```
 
 Passing **multiple** files turns on cross-document reference checking.
@@ -217,6 +220,10 @@ dangling half of the relationship that a frontmatter or link checker can't:
 - **Blast-radius scoping** (`--changed`): validate the whole corpus but report
   only the findings a set of changed files is responsible for — ideal for
   gating a PR (see below).
+- **Output for CI & editors**: a per-file human report, `--json`, or `--sarif`
+  (SARIF 2.1.0 — GitHub code scanning renders findings inline on the PR diff).
+  Every finding carries a stable `rule` id (e.g. `unresolved-reference`,
+  `missing-reciprocal`) so its identity survives message-wording changes.
 - Every finding is an `error` or `warning`; many rules let you pick.
 
 ---

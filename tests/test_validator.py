@@ -840,3 +840,95 @@ def test_scope_to_changed_matches_relative_and_absolute_paths(tmp_path):
     # Pass the changed file in a non-normalized form; it must still match.
     messy = str(tmp_path / "." / "alice.md")
     assert bob in scope_to_changed(results, [messy])
+
+
+# ── finding rule ids (taxonomy) & SARIF output ───────────────
+
+def _by_path(results):
+    return {e.path: e for errs in results.values() for e in errs}
+
+
+def test_every_finding_carries_a_rule_id():
+    results = validate_files(str(LIBRARY), [str(FIXTURES / "bad-book-2099.md")])
+    findings = [e for errs in results.values() for e in errs]
+    assert findings, "fixture should produce findings"
+    assert all(e.rule for e in findings), \
+        [f"{e.path}: {e.rule!r}" for e in findings if not e.rule]
+
+
+def test_rule_ids_for_representative_findings():
+    results = validate_files(str(LIBRARY), [str(FIXTURES / "bad-book-2099.md")])
+    byp = _by_path(results)
+    expected = {
+        "title": "title-mismatch",
+        "frontmatter.status": "enum-mismatch",
+        "frontmatter.year": "type-mismatch",
+        "sections": "section-order",
+        "section[Written By].item": "unresolved-reference",
+        "section[Editions].row[0].Year": "type-mismatch",
+        "section[Editions].row[0].Format": "enum-mismatch",
+        "section[Editions].row[0].ISBN": "type-mismatch",
+    }
+    for path, rule in expected.items():
+        assert path in byp, f"missing finding at {path}"
+        assert byp[path].rule == rule, f"{path}: got {byp[path].rule!r}, want {rule!r}"
+
+
+def test_rule_missing_reciprocal(tmp_path):
+    sp = _kin_schema(tmp_path)
+    results = validate_files(sp, [_person(tmp_path, "alice", parents_ref="bob"),
+                                  _person(tmp_path, "bob")])
+    assert _reciprocity_finding(results, "bob.md").rule == "missing-reciprocal"
+
+
+def test_rule_duplicate_key(tmp_path):
+    sp = _kin_schema(tmp_path)
+    a = write(tmp_path, "a.md", "---\ndocument_type: person\nperson_id: dup\nname: A\n---\n\n# a\n\n## Parents\n\n## Children\n")
+    b = write(tmp_path, "b.md", "---\ndocument_type: person\nperson_id: dup\nname: B\n---\n\n# b\n\n## Parents\n\n## Children\n")
+    results = validate_files(sp, [a, b])
+    assert any(e.rule == "duplicate-key" for errs in results.values() for e in errs)
+
+
+def test_rule_unknown_field():
+    schema = {"additional_fields": False, "frontmatter": {"fields": {"id": {}}}, "sections": []}
+    errors = SchemaValidator(schema).validate({"id": "x", "colour": "blue"}, None, [])
+    assert any(e.path == "frontmatter.colour" and e.rule == "unknown-field" for e in errors)
+
+
+def test_sarif_is_valid_2_1_0_and_declares_used_rules():
+    import json
+    from cartulary.validator import results_to_sarif
+    results = validate_files(str(LIBRARY), [str(FIXTURES / "bad-book-2099.md")])
+    doc = json.loads(results_to_sarif(results))
+    assert doc["version"] == "2.1.0"
+    assert "$schema" in doc
+    run = doc["runs"][0]
+    assert run["tool"]["driver"]["name"] == "cartulary"
+    declared = {r["id"] for r in run["tool"]["driver"]["rules"]}
+    used = {res["ruleId"] for res in run["results"]}
+    assert used, "expected results"
+    assert used <= declared, f"undeclared rules: {used - declared}"
+
+
+def test_sarif_result_shape():
+    import json
+    from cartulary.validator import results_to_sarif
+    results = validate_files(str(LIBRARY), [str(FIXTURES / "bad-book-2099.md")])
+    run = json.loads(results_to_sarif(results))["runs"][0]
+    r = next(x for x in run["results"] if x["ruleId"] == "unresolved-reference")
+    assert r["level"] == "error"
+    assert r["message"]["text"]
+    loc = r["locations"][0]
+    assert loc["physicalLocation"]["artifactLocation"]["uri"].endswith("bad-book-2099.md")
+    # structural path preserved as a logical location
+    assert any(l["fullyQualifiedName"] == "section[Written By].item"
+               for l in loc["logicalLocations"])
+
+
+def test_sarif_clean_corpus_has_no_results():
+    import json
+    from cartulary.validator import results_to_sarif
+    files = [str(FIXTURES / n) for n in VALID_CORPUS]
+    doc = json.loads(results_to_sarif(validate_files(str(LIBRARY), files)))
+    assert doc["runs"][0]["results"] == []
+
