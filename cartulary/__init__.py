@@ -9,4 +9,5 @@ from .validator import (
     load_schema,
     SchemaValidator,
     ValidationError,
+    SchemaError,
 )

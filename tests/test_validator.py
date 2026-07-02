@@ -536,9 +536,9 @@ def test_shipped_schemas_are_clean(schema_path):
     assert findings == [], [f"[{f.severity}] {f.path}: {f.message}" for f in findings]
 
 
-def test_meta_unknown_top_level_key_warns():
+def test_meta_unknown_top_level_key_is_error():
     findings = validate_schema({"sektions": [], "frontmatter": {"fields": {}}})
-    assert any(f.severity == "warning" and "sektions" in f.message for f in findings)
+    assert any(f.severity == "error" and "sektions" in f.message for f in findings)
 
 
 def test_meta_undefined_value_type_is_error():
@@ -565,11 +565,12 @@ def test_meta_filename_must_match_must_name_a_field():
     assert any(f.severity == "error" and "filename_must_match" in f.path for f in findings)
 
 
-def test_meta_misspelled_field_key_warns():
+def test_meta_misspelled_field_key_is_error():
     # The classic footgun: `requried` instead of `required` silently does nothing.
+    # It must be an *error* — a misspelled key means the intended rule never runs.
     schema = {"frontmatter": {"fields": {"id": {"requried": True}}}}
     findings = validate_schema(schema)
-    assert any(f.severity == "warning" and "requried" in f.message for f in findings)
+    assert any(f.severity == "error" and "requried" in f.message for f in findings)
 
 
 def test_meta_multi_schema_subschema_path():
@@ -932,3 +933,95 @@ def test_sarif_clean_corpus_has_no_results():
     doc = json.loads(results_to_sarif(validate_files(str(LIBRARY), files)))
     assert doc["runs"][0]["results"] == []
 
+
+
+# ── 0.2.0: schema is the contract (no silent under-validation) ──
+#
+# A malformed schema must not quietly under-validate. validate_files/validate_file
+# treat schema validity as a hard precondition: an invalid schema raises
+# SchemaError (you can't validate documents against a broken contract). Unknown /
+# misplaced keys are errors (a typo means the intended rule never runs), with an
+# `x-` escape hatch for intentional annotations. To *inspect* schema findings
+# without raising, call validate_schema() directly (the CLI/editors do).
+
+from cartulary import SchemaError  # noqa: E402
+
+
+def _schema_with_unknown_key(dir_):
+    # `filename_patttern` (typo) is unknown -> the author's rule never runs.
+    return dump_schema(dir_, "bad.yaml", {
+        "filename_patttern": "{slug}.md",
+        "frontmatter": {"fields": {"slug": {"required": True}}},
+        "sections": [],
+    })
+
+
+def test_validate_files_raises_on_invalid_schema(tmp_path):
+    sp = _schema_with_unknown_key(tmp_path)
+    doc = write(tmp_path, "doc.md", "---\nslug: doc\n---\n\n# X\n")
+    with pytest.raises(SchemaError) as exc:
+        validate_files(sp, [doc])
+    # the raised error carries the findings for inspection
+    assert any("filename_patttern" in f.message for f in exc.value.findings)
+
+
+def test_validate_file_raises_on_invalid_schema(tmp_path):
+    sp = _schema_with_unknown_key(tmp_path)
+    doc = write(tmp_path, "doc.md", "---\nslug: doc\n---\n\n# X\n")
+    with pytest.raises(SchemaError):
+        validate_file(sp, doc)
+
+
+def test_validate_schema_inspects_without_raising(tmp_path):
+    # The dedicated schema-checking entry point returns findings, never raises.
+    findings = validate_schema(_schema_with_unknown_key(tmp_path))
+    assert any(f.severity == "error" and "filename_patttern" in f.message for f in findings)
+
+
+def test_clean_schema_validates(tmp_path):
+    sp = dump_schema(tmp_path, "ok.yaml",
+                     {"frontmatter": {"fields": {"id": {"required": True}}}, "sections": []})
+    doc = write(tmp_path, "doc.md", "---\nid: doc\n---\n\n# X\n")
+    results = validate_files(sp, [doc])
+    assert all(not errs for errs in results.values())
+
+
+def test_x_prefixed_schema_keys_are_allowed():
+    schema = {"x-note": "internal", "frontmatter": {"fields": {"id": {"x-ann": 1}}}, "sections": []}
+    findings = validate_schema(schema)
+    assert not any("x-note" in f.message or "x-ann" in f.message for f in findings)
+
+
+# ── 0.2.0: general filename_pattern template ──
+
+def _fnpat_schema(dir_):
+    return dump_schema(dir_, "fn.yaml", {
+        "filename_pattern": "{slug}.md",
+        "frontmatter": {"fields": {"slug": {"required": True}}},
+        "sections": [],
+    })
+
+
+def test_filename_pattern_is_a_supported_key(tmp_path):
+    findings = validate_schema(_fnpat_schema(tmp_path))
+    assert not any("filename_pattern" in f.message for f in findings)  # not "unknown key"
+
+
+def test_filename_pattern_accepts_matching_name(tmp_path):
+    sp = _fnpat_schema(tmp_path)
+    doc = write(tmp_path, "aragorn.md", "---\nslug: aragorn\n---\n\n# A\n")
+    errors = validate_file(sp, doc)
+    assert not any(e.path == "filename" for e in errors), [e.message for e in errors]
+
+
+def test_filename_pattern_rejects_wrong_name(tmp_path):
+    sp = _fnpat_schema(tmp_path)
+    doc = write(tmp_path, "WRONG.md", "---\nslug: aragorn\n---\n\n# A\n")
+    errors = validate_file(sp, doc)
+    assert any(e.path == "filename" and e.severity == "error" for e in errors)
+
+
+def test_filename_pattern_meta_check_flags_unknown_field(tmp_path):
+    schema = {"filename_pattern": "{nope}.md", "frontmatter": {"fields": {"slug": {}}}, "sections": []}
+    findings = validate_schema(schema)
+    assert any(f.severity == "error" and "filename_pattern" in f.path for f in findings)

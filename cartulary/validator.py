@@ -42,6 +42,20 @@ class FrontmatterError(ValueError):
         super().__init__(detail)
 
 
+class SchemaError(ValueError):
+    """Raised by ``validate_files``/``validate_file`` in ``strict`` mode when the
+    schema itself has errors (unknown/misspelled keys, undefined types, etc.).
+
+    A malformed schema silently under-validates — the intended rule never runs —
+    so strict callers get a hard failure instead of a false "clean" result. The
+    schema findings are attached as ``.findings`` for inspection."""
+
+    def __init__(self, findings: list["ValidationError"]):
+        self.findings = findings
+        detail = "; ".join(f"[{f.path}] {f.message}" for f in findings)
+        super().__init__(f"invalid schema: {detail}")
+
+
 def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Extract YAML frontmatter from markdown text.
 
@@ -346,6 +360,19 @@ class SchemaValidator:
             field_val = frontmatter.get(match_field, "")
             if stem != field_val:
                 self._error("filename", f"Filename '{stem}' does not match {match_field} '{field_val}'",
+                            rule="filename-mismatch")
+
+        # filename_pattern: a template matched against the *full* filename, with
+        # {field} placeholders filled from frontmatter (generalises the stem-only
+        # filename_must_match). e.g. "{slug}.md" or "{year}-{slug}.md".
+        pattern = self.schema.get("filename_pattern")
+        if filepath and isinstance(pattern, str):
+            name = Path(filepath).name
+            expected = re.sub(r"\{(\w+)\}",
+                              lambda m: str(frontmatter.get(m.group(1), "")), pattern)
+            if name != expected:
+                self._error("filename",
+                            f"Filename '{name}' does not match pattern '{pattern}' (expected '{expected}')",
                             rule="filename-mismatch")
 
         self._check_frontmatter(frontmatter)
@@ -943,8 +970,27 @@ def _parse_file(filepath: str) -> tuple[dict[str, Any], str | None, list[Section
     return frontmatter, raw_title, sections
 
 
+def _require_valid_schema(schema_path: str) -> None:
+    """Precondition for document validation: the schema itself must be valid.
+
+    Raises :class:`SchemaError` if schema meta-validation finds any error — you
+    cannot meaningfully validate documents against an invalid contract, and a
+    malformed schema silently under-validates (the intended rule never runs).
+    To *inspect* schema findings without raising (editors, tooling, the CLI's
+    report), call :func:`validate_schema` directly.
+    """
+    schema_errors = [f for f in validate_schema(schema_path) if f.severity == "error"]
+    if schema_errors:
+        raise SchemaError(schema_errors)
+
+
 def validate_file(schema_path: str, filepath: str) -> list[ValidationError]:
-    """Validate a single file (no cross-document ref checking)."""
+    """Validate a single file (no cross-document ref checking).
+
+    Raises :class:`SchemaError` if the schema itself is invalid (see
+    :func:`_require_valid_schema`).
+    """
+    _require_valid_schema(schema_path)
     loaded = load_schema(schema_path)
     try:
         frontmatter, title, sections = _parse_file(filepath)
@@ -985,11 +1031,16 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
     schema to validate against.  Primary keys from all schemas share a
     single namespace so cross-document refs resolve across document types.
 
+    Raises :class:`SchemaError` if the schema itself is invalid (see
+    :func:`_require_valid_schema`) — a malformed schema would silently
+    under-validate the whole corpus, so it is a hard precondition, not a finding.
+
     Pass 1: parse all files, collect primary keys.
     Pass 2: validate each file with known_ids so unresolved refs
             are reported as warnings.
     Pass 3: check inverse ref reciprocity.
     """
+    _require_valid_schema(schema_path)
     loaded = load_schema(schema_path)
     multi = loaded.get("_multi", False)
     if multi:
@@ -1217,7 +1268,7 @@ def load_schema(path: str | Path) -> dict:
 # ════════════════════════════════════════════════════════════
 
 _TOP_KEYS = {"value_types", "definitions", "frontmatter", "title_pattern", "sections",
-             "primary_key", "filename_must_match", "additional_fields",
+             "primary_key", "filename_must_match", "filename_pattern", "additional_fields",
              "additional_sections", "additional_subsections", "conventions", "document"}
 _FIELD_KEYS = {"required", "value", "enum", "type", "ref", "primary_key", "items"}
 _ITEMS_KEYS = {"type", "fields", "any_of", "ref", "enum", "value", "required"}
@@ -1251,14 +1302,17 @@ def validate_schema(path_or_dict) -> list[ValidationError]:
 
     errs: list[ValidationError] = []
 
-    def err(p, m, sev="error"):
-        errs.append(ValidationError(path=p, message=m, severity=sev))
+    def err(p, m, sev="error", rule="schema-error"):
+        errs.append(ValidationError(path=p, message=m, severity=sev, rule=rule))
 
     def unknown_keys(d, allowed, p):
+        # An unknown or misplaced key means the rule the author intended never
+        # runs — an error, not a warning. Keys prefixed `x-` are an escape hatch
+        # for intentional annotations/extensions and are left alone.
         if isinstance(d, dict):
             for k in d:
-                if k not in allowed:
-                    err(p, f"Unknown key '{k}'", "warning")
+                if k not in allowed and not str(k).startswith("x-"):
+                    err(p, f"Unknown key '{k}'", "error", rule="unknown-schema-key")
 
     def check_conventions(cv, p):
         unknown_keys(cv, _CONVENTIONS_KEYS, p)
@@ -1319,6 +1373,13 @@ def validate_schema(path_or_dict) -> list[ValidationError]:
         if isinstance(fmm, str) and fmm not in fields:
             err(f"{p}.filename_must_match",
                 f"filename_must_match '{fmm}' is not a defined frontmatter field")
+        fnp = schema.get("filename_pattern")
+        if isinstance(fnp, str):
+            for placeholder in re.findall(r"\{(\w+)\}", fnp):
+                if placeholder not in fields:
+                    err(f"{p}.filename_pattern",
+                        f"filename_pattern references '{placeholder}', "
+                        f"which is not a defined frontmatter field")
         for j, sec in enumerate(schema.get("sections") or []):
             check_section(sec, f"{p}.sections[{j}]", vts)
 
@@ -1380,6 +1441,8 @@ RULES: dict[str, tuple[str, str]] = {
     "missing-reciprocal":   ("MissingReciprocal", "A referenced document does not link back via its inverse section."),
     "invalid-frontmatter":  ("InvalidFrontmatter", "The YAML frontmatter block failed to parse."),
     "document-type":        ("DocumentType", "The document_type field is missing or unknown."),
+    "unknown-schema-key":   ("UnknownSchemaKey", "The schema has an unknown or misplaced key, so the intended rule never runs."),
+    "schema-error":         ("SchemaError", "The schema itself is invalid (bad type reference, malformed rule, etc.)."),
 }
 
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"

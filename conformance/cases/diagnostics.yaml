@@ -79,3 +79,32 @@
     - file: wrong-name.md
       path: "filename"
       severity: error
+
+- name: filename-pattern-mismatch
+  description: filename_pattern matches the full filename against a {field} template.
+  schema: filename-pattern.yaml
+  documents:
+    - path: wrong.md
+      content: |
+        ---
+        slug: expected-slug
+        ---
+
+        # X
+  expect:
+    - file: wrong.md
+      path: "filename"
+      severity: error
+
+- name: filename-pattern-ok
+  description: A filename that matches the pattern is clean.
+  schema: filename-pattern.yaml
+  documents:
+    - path: expected-slug.md
+      content: |
+        ---
+        slug: expected-slug
+        ---
+
+        # X
+  expect: []

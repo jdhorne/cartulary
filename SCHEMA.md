@@ -36,6 +36,7 @@ A schema is a YAML file. It comes in two shapes:
 | `sections` | per schema | Ordered list of section rules (see [Sections](#sections)). |
 | `primary_key` | per schema | Name of the frontmatter field that uniquely identifies the document. Equivalent to setting `primary_key: true` on the field. |
 | `filename_must_match` | per schema | Name of a frontmatter field whose value must equal the file's stem (filename without extension). |
+| `filename_pattern` | per schema | Template matched against the full filename, with `{field}` placeholders filled from frontmatter — e.g. `"{slug}.md"` or `"{year}-{slug}.md"`. Generalises `filename_must_match`. |
 | `additional_fields` | per schema | `true` (default) allows undeclared frontmatter fields; `false` errors on them; `"warn"` warns. `document_type` is always exempt. |
 | `additional_sections` | per schema | `false` (default) errors on unknown sections; `"warn"` warns; `true` allows them. |
 | `additional_subsections` | per schema | Document-level default for unknown subsections; overridable per section. |
@@ -335,17 +336,27 @@ hard-coding them.
 
 ## Validating the schema itself
 
-A schema can be checked *before* it is used, which catches the mistakes a
-document validator would otherwise pass over silently:
+**The schema is the contract, so it is validated as a hard precondition.** A
+malformed schema silently under-validates — the rule the author intended simply
+never runs — so this is treated as an error, not a document finding:
 
-- **Errors:** a `type:` naming an undefined value_type, an unknown content
-  `type`, and `primary_key` / `filename_must_match` naming a field that does
-  not exist.
-- **Warnings:** misspelled or unrecognized keys (e.g. `requried:` instead of
-  `required:`) at any level.
+- Validating documents (`validate_files` / `validate_file`, and the CLI) checks
+  the schema **first**. If the schema has any error, it does not run: the library
+  raises `SchemaError`; the reference CLI prints the findings and exits with code
+  2. You cannot validate a corpus against a broken contract.
+- To *inspect* a schema's findings without raising (editors, tooling, custom
+  reporting), call `validate_schema()` directly — it returns the findings.
 
-The reference CLI runs this first and refuses to proceed (exit code 2) if the
-schema has errors.
+Schema **errors** include: an **unknown or misplaced key** at any level (e.g.
+`requried:` instead of `required:`, or `filename_pattern` where it doesn't
+apply — a typo silently disables the intended rule), a `type:` naming an
+undefined value_type, an unknown content `type`, and `primary_key` /
+`filename_must_match` / `filename_pattern` referencing a field that does not
+exist.
+
+Keys prefixed **`x-`** are an escape hatch: they are ignored everywhere, so you
+can annotate a schema (`x-note:`, `x-owner:`) without tripping the unknown-key
+check.
 
 ---
 

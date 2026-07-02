@@ -210,6 +210,12 @@ dangling half of the relationship that a frontmatter or link checker can't:
 - `value_types`: named, reusable `pattern` / `enum` / `any_of` definitions,
   plus on-disk `exists` checks.
 - Title: `{field}` substitution with an optional `~` "circa" allowance.
+- Filenames: `filename_must_match` (stem equals a field) or the general
+  `filename_pattern` template (e.g. `"{slug}.md"`, `"{year}-{slug}.md"`).
+- **The schema is the contract**: an invalid schema (unknown/misspelled or
+  misplaced key, bad type reference) is a hard error — `validate_files` raises
+  `SchemaError` and the CLI exits non-zero — so a malformed schema can't
+  silently under-validate. `x-` prefixed keys are allowed for annotations.
 - Sections: required/deprecated, strict ordering, `position: last`,
   unknown-section policy, and recursive subsections.
 - Content types: `prose`, typed `table` (per-column types, `nullable`,
@@ -271,7 +277,7 @@ PR that didn't touch them. Each finding's blast radius is also exposed as
 ```yaml
 repos:
   - repo: https://github.com/jdhorne/cartulary
-    rev: v0.1.1
+    rev: v0.2.0
     hooks:
       - id: cartulary
         args: [schema.yaml, docs/]   # your schema, then the corpus path(s)
@@ -293,7 +299,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdhorne/cartulary@v0.1.1
+      - uses: jdhorne/cartulary@v0.2.0
         with:
           schema: schema.yaml
           files: docs/

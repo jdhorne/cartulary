@@ -1,0 +1,6 @@
+# Exercises filename_pattern: the full filename must match a {field} template.
+filename_pattern: "{slug}.md"
+frontmatter:
+  fields:
+    slug: { required: true }
+sections: []
