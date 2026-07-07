@@ -1,5 +1,5 @@
 name: Cartulary Markdown Validator
-description: "Foreign keys for your Markdown docs: cross-document referential integrity, not just schema validation."
+description: "Foreign keys for your Markdown docs: cross-document referential integrity on top of schema validation."
 branding:
   icon: check-circle
   color: blue
