@@ -1,0 +1,189 @@
+# Duplicate primary keys are a hard, invalid-corpus condition (see
+# `duplicate-key` in references.yaml). These cases pin what happens
+# *downstream* of a collision: a duplicated id must never be used as a
+# resolution target (for reciprocity or for reference-type checking), and
+# the finding set must be a pure function of the set of documents — never of
+# the order they were validated in. Each scenario below ships as a twin pair
+# with the colliding documents swapped; `expect` is identical across the pair.
+
+- name: duplicate-key-poisons-reciprocity-order-a
+  description: >
+    Refs to a duplicated primary key are ambiguous-reference; reciprocity is
+    never evaluated against a duplicated id. Findings are independent of
+    document order (see the -order-b twin).
+  schema: person-relations.yaml
+  documents:
+    - path: carol1.md
+      content: |
+        ---
+        person_id: carol
+        ---
+        # Carol One
+
+        ## Relations
+
+        - Dave → `dave`
+    - path: carol2.md
+      content: |
+        ---
+        person_id: carol
+        ---
+        # Carol Two
+
+        ## Relations
+
+        - Erin → `erin`
+    - path: dave.md
+      content: |
+        ---
+        person_id: dave
+        ---
+        # Dave
+
+        ## Relations
+
+        - Carol → `carol`
+    - path: erin.md
+      content: |
+        ---
+        person_id: erin
+        ---
+        # Erin
+
+        ## Relations
+
+        - Carol → `carol`
+  expect:
+    - { file: carol1.md, path: frontmatter.person_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: carol2.md, path: frontmatter.person_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: dave.md, path: "section[Relations].item", severity: error,
+        message_contains: "ambiguous" }
+    - { file: erin.md, path: "section[Relations].item", severity: error,
+        message_contains: "ambiguous" }
+
+- name: duplicate-key-poisons-reciprocity-order-b
+  description: Same corpus as -order-a with the colliding files swapped; expect is identical.
+  schema: person-relations.yaml
+  documents:
+    - path: carol2.md
+      content: |
+        ---
+        person_id: carol
+        ---
+        # Carol Two
+
+        ## Relations
+
+        - Erin → `erin`
+    - path: carol1.md
+      content: |
+        ---
+        person_id: carol
+        ---
+        # Carol One
+
+        ## Relations
+
+        - Dave → `dave`
+    - path: dave.md
+      content: |
+        ---
+        person_id: dave
+        ---
+        # Dave
+
+        ## Relations
+
+        - Carol → `carol`
+    - path: erin.md
+      content: |
+        ---
+        person_id: erin
+        ---
+        # Erin
+
+        ## Relations
+
+        - Carol → `carol`
+  expect:
+    - { file: carol1.md, path: frontmatter.person_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: carol2.md, path: frontmatter.person_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: dave.md, path: "section[Relations].item", severity: error,
+        message_contains: "ambiguous" }
+    - { file: erin.md, path: "section[Relations].item", severity: error,
+        message_contains: "ambiguous" }
+
+- name: duplicate-key-poisons-reference-type-order-a
+  description: >
+    A typed ref (ref: book) to an id duplicated across author and book is
+    ambiguous-reference, not reference-type, and not silence — in either
+    order (see -order-b twin).
+  schema: review-shared-entity-id.yaml
+  documents:
+    - path: author_x1.md
+      content: |
+        ---
+        document_type: author
+        entity_id: x1
+        ---
+        # Author X1
+    - path: book_x1.md
+      content: |
+        ---
+        document_type: book
+        entity_id: x1
+        ---
+        # Book X1
+    - path: review1.md
+      content: |
+        ---
+        document_type: review
+        review_id: r1
+        subject: x1
+        ---
+        # Review 1
+  expect:
+    - { file: author_x1.md, path: frontmatter.entity_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: book_x1.md, path: frontmatter.entity_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: review1.md, path: frontmatter.subject, severity: error,
+        message_contains: "ambiguous" }
+
+- name: duplicate-key-poisons-reference-type-order-b
+  description: book_x1 listed before author_x1; expect is identical.
+  schema: review-shared-entity-id.yaml
+  documents:
+    - path: book_x1.md
+      content: |
+        ---
+        document_type: book
+        entity_id: x1
+        ---
+        # Book X1
+    - path: author_x1.md
+      content: |
+        ---
+        document_type: author
+        entity_id: x1
+        ---
+        # Author X1
+    - path: review1.md
+      content: |
+        ---
+        document_type: review
+        review_id: r1
+        subject: x1
+        ---
+        # Review 1
+  expect:
+    - { file: author_x1.md, path: frontmatter.entity_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: book_x1.md, path: frontmatter.entity_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: review1.md, path: frontmatter.subject, severity: error,
+        message_contains: "ambiguous" }

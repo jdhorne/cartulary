@@ -307,7 +307,8 @@ class SchemaValidator:
 
     def __init__(self, schema: dict, known_ids: set[str] | None = None,
                  known_id_types: dict[str, str] | None = None,
-                 ref_targets: dict[str, tuple[set[str], dict]] | None = None):
+                 ref_targets: dict[str, tuple[set[str], dict]] | None = None,
+                 ambiguous_ids: dict[str, set[str]] | None = None):
         self.schema = schema
         self.value_types = schema.get("value_types", {})
         # Document conventions (the micro-syntax for cross-references), overridable
@@ -325,6 +326,12 @@ class SchemaValidator:
         # "any owner of that field".
         self.known_id_types = known_id_types or {}
         self.ref_targets = ref_targets or {}
+        # A duplicated primary key is an invalid-corpus condition: the id no
+        # longer identifies a unique document, so it must never be used as a
+        # resolution target. Maps each such ambiguous id to the set of files
+        # colliding on it (used for the ambiguous-reference finding's
+        # caused_by, alongside the referring file).
+        self.ambiguous_ids = ambiguous_ids or {}
         self.errors: list[ValidationError] = []
         self.refs_found: list[tuple[str, str, str | None]] = []  # (path, ref_value, ref_target)
         self.inverse_refs: list[tuple[str, str, str]] = []  # (section, target_id, inverse_section)
@@ -381,9 +388,11 @@ class SchemaValidator:
         self._check_refs()
         return self.errors
 
-    def _error(self, path: str, message: str, severity: str = "error", rule: str = ""):
+    def _error(self, path: str, message: str, severity: str = "error", rule: str = "",
+               caused_by: set[str] | None = None):
         self.errors.append(ValidationError(path=path, message=message,
-                                           severity=severity, rule=rule))
+                                           severity=severity, rule=rule,
+                                           caused_by=set(caused_by) if caused_by else set()))
 
     # ── Cross-document ref checking ──────────────────────
 
@@ -430,6 +439,15 @@ class SchemaValidator:
         if self.known_ids is None:
             return
         for path, ref, ref_target in self.refs_found:
+            if ref in self.ambiguous_ids:
+                # The id exists but names more than one document — it is not
+                # unresolved, and no particular colliding document is the
+                # "real" target, so no reference-type conclusion is drawn.
+                self._error(path, f"Reference '{ref}' is ambiguous: '{ref}' is a "
+                                  f"duplicated primary key and cannot be resolved to a "
+                                  f"unique document", rule="ambiguous-reference",
+                            caused_by=self.ambiguous_ids[ref])
+                continue
             if ref not in self.known_ids:
                 self._error(path, f"Unresolved reference: '{ref}'", rule="unresolved-reference")
                 continue
@@ -1127,6 +1145,19 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                     id_to_file[pk] = fp
                     id_to_type[pk] = dt
 
+    # A duplicated primary key is an invalid-corpus condition: the id no
+    # longer identifies a unique document, so downstream checks must never
+    # use it as a resolution target — deterministically, regardless of
+    # argument order. `ambiguous` maps each such id to every file colliding
+    # on it (duplicate_ids already accumulates the full list per pk during
+    # pass 1, independent of which file was "first"). It is excluded from
+    # `id_to_type` so a stale first-seen type can never leak into the
+    # reference-type check (belt-and-suspenders: `_check_refs` also short-
+    # circuits on `ambiguous_ids` before consulting `known_id_types`).
+    ambiguous: dict[str, set[str]] = {pk: set(files) for pk, files in duplicate_ids.items()}
+    for pk in ambiguous:
+        id_to_type.pop(pk, None)
+
     # Pass 2: validate each file, collect inverse refs
     inverse_index: dict[str, list[tuple[str, str, str]]] = {}
     ref_index: dict[str, set[tuple[str, str]]] = {}
@@ -1134,7 +1165,8 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
     for fp, dt, schema, frontmatter, title, sections in parsed:
         validator = SchemaValidator(schema, known_ids=known_ids,
                                     known_id_types=id_to_type,
-                                    ref_targets=ref_targets)
+                                    ref_targets=ref_targets,
+                                    ambiguous_ids=ambiguous)
         errors = validator.validate(frontmatter, title, sections, filepath=fp)
 
         pk_field = pk_fields.get(dt)
@@ -1152,18 +1184,25 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                         caused_by={fp, *duplicate_ids[pk]},
                     ))
 
-                ref_index[pk] = set()
-                for section_heading, target_id, inverse_section in validator.inverse_refs:
-                    inverse_index.setdefault(target_id, []).append(
-                        (pk, section_heading, inverse_section)
-                    )
-                for _path, ref, _target in validator.refs_found:
-                    if _path.startswith("section["):
-                        sec = _path.split("]")[0].removeprefix("section[")
-                        ref_index[pk].add((sec, ref))
-                    elif _path.startswith("frontmatter."):
-                        # Track frontmatter refs for cross-document resolution
-                        ref_index[pk].add(("_frontmatter", ref))
+                # A document whose own key is ambiguous participates in no
+                # reciprocity checking, as source or as target: its outbound
+                # refs never populate ref_index (so an expectation targeting
+                # it finds nothing to check against — see pass 3's `target_id
+                # not in ref_index` skip) and its own inverse_refs never
+                # become expectations (no reciprocity is asked of it either).
+                if pk not in ambiguous:
+                    ref_index[pk] = set()
+                    for section_heading, target_id, inverse_section in validator.inverse_refs:
+                        inverse_index.setdefault(target_id, []).append(
+                            (pk, section_heading, inverse_section)
+                        )
+                    for _path, ref, _target in validator.refs_found:
+                        if _path.startswith("section["):
+                            sec = _path.split("]")[0].removeprefix("section[")
+                            ref_index[pk].add((sec, ref))
+                        elif _path.startswith("frontmatter."):
+                            # Track frontmatter refs for cross-document resolution
+                            ref_index[pk].add(("_frontmatter", ref))
 
         results[fp] = errors
 
@@ -1438,6 +1477,8 @@ RULES: dict[str, tuple[str, str]] = {
     "unresolved-reference": ("UnresolvedReference", "A ref does not resolve to any known primary key."),
     "reference-type":       ("ReferenceType", "A ref resolves to a document of the wrong type."),
     "duplicate-key":        ("DuplicateKey", "A primary key is used by more than one document."),
+    "ambiguous-reference":  ("AmbiguousReference", "A ref's value equals a primary key duplicated across "
+                                                    "documents, so it cannot be resolved to a unique target."),
     "missing-reciprocal":   ("MissingReciprocal", "A referenced document does not link back via its inverse section."),
     "invalid-frontmatter":  ("InvalidFrontmatter", "The YAML frontmatter block failed to parse."),
     "document-type":        ("DocumentType", "The document_type field is missing or unknown."),

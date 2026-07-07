@@ -1,0 +1,19 @@
+# person-relations.yaml — single-schema conformance fixture: a self-
+# referential "Relations" section (person -> person, unlabeled ref_list,
+# inverse Relations). Used by the duplicate-key / ambiguous-reference
+# conformance cases in cases/duplicates.yaml.
+
+primary_key: person_id
+additional_sections: false
+
+frontmatter:
+  fields:
+    person_id: { required: true, primary_key: true }
+
+sections:
+  - heading: Relations
+    content:
+      type: ref_list
+      style: unlabeled
+      ref: person
+      inverse: Relations

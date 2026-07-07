@@ -1,0 +1,26 @@
+# review-shared-entity-id.yaml — multi-schema conformance fixture: `author`
+# and `book` both use the PK field name `entity_id`; `review.subject` targets
+# the `book` document type precisely (not the legacy field-name form). Used
+# by the duplicate-key / ambiguous-reference conformance cases in
+# cases/duplicates.yaml to pin that a `ref: book` naming a duplicated id is
+# reported as ambiguous-reference, never reference-type.
+
+schemas:
+  author:
+    frontmatter:
+      fields:
+        document_type: { value: author, required: true }
+        entity_id: { primary_key: true, required: true }
+
+  book:
+    frontmatter:
+      fields:
+        document_type: { value: book, required: true }
+        entity_id: { primary_key: true, required: true }
+
+  review:
+    frontmatter:
+      fields:
+        document_type: { value: review, required: true }
+        review_id: { primary_key: true, required: true }
+        subject: { ref: book }

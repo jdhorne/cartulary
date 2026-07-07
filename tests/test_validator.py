@@ -833,6 +833,21 @@ def test_duplicate_key_caused_by_all_colliding_files(tmp_path):
     assert scope_to_changed(results, [a]) and scope_to_changed(results, [b])
 
 
+def test_ambiguous_reference_caused_by_includes_referrer_and_colliding_files(tmp_path):
+    # dup is a duplicated primary key (a.md / b.md); carol.md's Parents ref to
+    # `dup` must be ambiguous-reference, with caused_by = referrer + both
+    # colliding files — never resolved against either of them.
+    sp = _kin_schema(tmp_path)
+    a = write(tmp_path, "a.md", "---\ndocument_type: person\nperson_id: dup\nname: A\n---\n\n# a\n\n## Parents\n\n## Children\n")
+    b = write(tmp_path, "b.md", "---\ndocument_type: person\nperson_id: dup\nname: B\n---\n\n# b\n\n## Parents\n\n## Children\n")
+    ref = _person(tmp_path, "carol", parents_ref="dup")
+    results = validate_files(sp, [a, b, ref])
+    amb = [e for errs in results.values() for e in errs if e.rule == "ambiguous-reference"]
+    assert amb, [f"[{e.path}] {e.message}" for errs in results.values() for e in errs]
+    assert len(amb) == 1
+    assert amb[0].caused_by == {a, b, ref}
+
+
 def test_scope_to_changed_matches_relative_and_absolute_paths(tmp_path):
     sp = _kin_schema(tmp_path)
     alice = _person(tmp_path, "alice", parents_ref="bob")
