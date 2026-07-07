@@ -1200,9 +1200,14 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                         if _path.startswith("section["):
                             sec = _path.split("]")[0].removeprefix("section[")
                             ref_index[pk].add((sec, ref))
-                        elif _path.startswith("frontmatter."):
-                            # Track frontmatter refs for cross-document resolution
-                            ref_index[pk].add(("_frontmatter", ref))
+                            # Frontmatter refs are deliberately NOT added here: a
+                            # section-level `inverse:` expectation must be satisfied
+                            # only by the target's own inverse *section*, never by
+                            # an unrelated frontmatter field — even one on a
+                            # document whose section happens to be named
+                            # "_frontmatter". ref_index is consumed only by pass 3
+                            # (reciprocity); frontmatter refs still participate in
+                            # resolution via refs_found / known_ids in _check_refs.
 
         results[fp] = errors
 

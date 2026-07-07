@@ -165,6 +165,36 @@
       severity: warning
       message_contains: "reciprocal"
 
+- name: reciprocal-not-satisfied-by-frontmatter-field
+  description: >
+    A section inverse expectation is satisfied only by the target's inverse
+    section, never by an unrelated frontmatter ref field — including when the
+    section is literally named "_frontmatter".
+  schema: person-frontmatter-heading.yaml
+  documents:
+    - path: alice.md
+      content: |
+        ---
+        person_id: alice
+        ---
+        # Alice
+
+        ## _frontmatter
+
+        - Bob → `bob`
+    - path: bob.md
+      content: |
+        ---
+        person_id: bob
+        mentor: alice
+        ---
+        # Bob
+  expect:
+    - file: bob.md
+      path: "section[_frontmatter]"
+      severity: warning
+      message_contains: "Missing reciprocal"
+
 - name: unknown-document-type
   description: In a multi-schema file, a document_type with no matching schema is reported.
   schema: library.yaml

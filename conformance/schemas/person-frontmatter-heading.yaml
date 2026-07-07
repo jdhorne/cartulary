@@ -1,0 +1,21 @@
+# person-frontmatter-heading.yaml — a section literally named "_frontmatter"
+# alongside a frontmatter ref field. Pins that the two are tracked in disjoint
+# keyspaces: a section-level inverse expectation must be satisfied only by
+# the target's own "_frontmatter" *section*, never by an unrelated
+# frontmatter ref field (see cases/references.yaml).
+
+primary_key: person_id
+additional_sections: false
+
+frontmatter:
+  fields:
+    person_id: { required: true, primary_key: true }
+    mentor: { ref: person }
+
+sections:
+  - heading: _frontmatter
+    content:
+      type: ref_list
+      style: unlabeled
+      ref: person
+      inverse: _frontmatter
