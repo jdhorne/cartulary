@@ -950,6 +950,10 @@ class SchemaValidator:
                                       ref_target=ref_target)
                     if inverse:
                         self.inverse_refs.append((section.heading, item.ref, inverse))
+                else:
+                    self._error(f"{path}.item",
+                                "No cross-reference and not marked Unknown",
+                                severity="warning", rule="ref-missing")
 
     # ── Log content ──────────────────────────────────────
 

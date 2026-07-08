@@ -315,6 +315,63 @@
       severity: error
       message_contains: "at least 1"
 
+- name: unlabeled-ref-list-item-with-no-parseable-reference
+  description: >
+    An unlabeled ref_list item that is not an unknown_literal and contains no
+    parseable cross-reference (no arrow + backticked id) is a warning
+    (ref-missing), the unlabeled analogue of a labeled slot with no ref. The
+    item still counts toward min_items, so no ref-cardinality error also fires.
+  schema: conventions.yaml
+  documents:
+    - path: lonely.md
+      content: |
+        ---
+        id: lonely
+        ---
+
+        # lonely
+
+        ## Links
+
+        - Just some prose, no arrow or backticks here
+  expect:
+    - file: lonely.md
+      path: "section[Links].item"
+      severity: warning
+      message_contains: "cross-reference"
+
+- name: unlabeled-ref-list-unknown-literal-item-is-silent
+  description: >
+    An unlabeled ref_list item matching conventions.unknown_literals produces
+    no ref-missing finding (sibling of the case above, proving the fix does
+    not over-fire on legitimate unknown-literal items).
+  schema: conventions.yaml
+  documents:
+    - path: c3.md
+      content: |
+        ---
+        id: c3
+        ---
+
+        # c3
+
+        ## Links
+
+        - Thing -> `c4`
+        - TBD
+    - path: c4.md
+      content: |
+        ---
+        id: c4
+        ---
+
+        # c4
+
+        ## Links
+
+        - Thing -> `c3`
+  expect: []
+
 - name: ref-list-max-items-exceeded
   description: An unlabeled reference list with more than max_items real entries is an error.
   schema: structure.yaml
