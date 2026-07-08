@@ -165,6 +165,75 @@
       severity: warning
       message_contains: "reciprocal"
 
+- name: missing-reciprocal-collapses-per-mention-duplicates
+  description: >
+    A source that mentions the same target twice in one inverse-bearing
+    section produces exactly ONE missing-reciprocal finding for that
+    (source, target, inverse section) triple — not one per mention. See the
+    "-distinct-triples" case for the non-over-dedup boundary.
+  schema: person-relations.yaml
+  documents:
+    - path: alice.md
+      content: |
+        ---
+        person_id: alice
+        ---
+        # Alice
+
+        ## Relations
+
+        - Bob (context A) → `bob`
+        - Bob (context B) → `bob`
+    - path: bob.md
+      content: |
+        ---
+        person_id: bob
+        ---
+        # Bob
+  expect:
+    - file: bob.md
+      path: "section[Relations]"
+      severity: warning
+      message_contains: "reciprocal"
+
+- name: missing-reciprocal-distinct-triples-both-reported
+  description: >
+    A source that mentions the same target from two DIFFERENT sections whose
+    `inverse:` values differ produces two distinct missing-reciprocal
+    findings — the (source, target, inverse section) triple differs, so
+    de-duplication (see the "-collapses" case) must not merge them.
+  schema: person-dual-inverse.yaml
+  documents:
+    - path: alice.md
+      content: |
+        ---
+        person_id: alice
+        ---
+        # Alice
+
+        ## Colleagues
+
+        - Bob → `bob`
+
+        ## Mentors
+
+        - Bob → `bob`
+    - path: bob.md
+      content: |
+        ---
+        person_id: bob
+        ---
+        # Bob
+  expect:
+    - file: bob.md
+      path: "section[Colleagues]"
+      severity: warning
+      message_contains: "reciprocal"
+    - file: bob.md
+      path: "section[Mentees]"
+      severity: warning
+      message_contains: "reciprocal"
+
 - name: reciprocal-not-satisfied-by-frontmatter-field
   description: >
     A section inverse expectation is satisfied only by the target's inverse

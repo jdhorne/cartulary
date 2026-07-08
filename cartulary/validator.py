@@ -1248,7 +1248,21 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
                 # become expectations (no reciprocity is asked of it either).
                 if pk not in ambiguous:
                     ref_index[pk] = set()
+                    # De-duplicate to at most one expectation per (this source,
+                    # target, inverse section) triple: a target mentioned
+                    # several times in the same inverse-bearing section (or
+                    # from several sections sharing one `inverse:`) must yield
+                    # exactly one missing-reciprocal finding, not one per
+                    # mention. Sections whose `inverse:` differs are distinct
+                    # triples and are kept separately. Order is the source
+                    # document's own section/item order, which is independent
+                    # of corpus/argument order, so this stays deterministic.
+                    seen_inverse_triples: set[tuple[str, str]] = set()
                     for section_heading, target_id, inverse_section in validator.inverse_refs:
+                        triple_key = (target_id, inverse_section)
+                        if triple_key in seen_inverse_triples:
+                            continue
+                        seen_inverse_triples.add(triple_key)
                         inverse_index.setdefault(target_id, []).append(
                             (pk, section_heading, inverse_section)
                         )

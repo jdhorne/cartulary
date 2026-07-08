@@ -1,0 +1,28 @@
+# person-dual-inverse.yaml — two ref_list sections on the same document type,
+# each with a *different* `inverse:` target. Used to pin the boundary of
+# missing-reciprocal de-duplication: the same source mentioning the same
+# target from two sections whose `inverse:` values differ must still produce
+# two distinct findings (see cases/references.yaml, the "-distinct-triples"
+# case, and its "-collapses" twin which mentions a target twice from a
+# *single* section).
+
+primary_key: person_id
+additional_sections: false
+
+frontmatter:
+  fields:
+    person_id: { required: true, primary_key: true }
+
+sections:
+  - heading: Colleagues
+    content:
+      type: ref_list
+      style: unlabeled
+      ref: person
+      inverse: Colleagues
+  - heading: Mentors
+    content:
+      type: ref_list
+      style: unlabeled
+      ref: person
+      inverse: Mentees
