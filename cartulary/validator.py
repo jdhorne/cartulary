@@ -1726,8 +1726,13 @@ def main():
         changed = [p for group in args.changed for p in re.split(r"[,\s]+", group.strip()) if p]
         corpus_resolved = {str(Path(f).resolve()) for f in valid_files}
         for c in changed:
-            if str(Path(c).resolve()) not in corpus_resolved and not machine:
-                print(f"  NOTE: --changed file is not in the validated set: {c}")
+            if str(Path(c).resolve()) not in corpus_resolved:
+                # Ignoring a non-matching --changed path is intentional (deletions
+                # and renames legitimately appear in `git diff --name-only`), but
+                # the signal must reach CI: always emit on stderr, in every output
+                # mode, so stdout stays findings-only/machine-parseable while a
+                # typo'd or stale --changed argument is never silent.
+                print(f"  NOTE: --changed file is not in the validated set: {c}", file=sys.stderr)
         results = scope_to_changed(results, changed)
 
     if machine:

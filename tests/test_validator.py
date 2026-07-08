@@ -9,6 +9,8 @@ capability — cross-document reference resolution with reciprocal
 (inverse) checking.
 """
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -1025,6 +1027,95 @@ def test_scope_to_changed_matches_relative_and_absolute_paths(tmp_path):
     # Pass the changed file in a non-normalized form; it must still match.
     messy = str(tmp_path / "." / "alice.md")
     assert bob in scope_to_changed(results, [messy])
+
+
+# ── #19: --changed path matching nothing must be diagnosed on stderr,
+#         in every output mode, without changing findings or exit status ──
+
+def _run_cli(*args):
+    # Invoke main() directly (rather than -m cartulary.validator) to avoid a
+    # spurious runpy RuntimeWarning about re-importing an already-imported
+    # package, which would otherwise pollute stderr in these assertions.
+    return subprocess.run(
+        [sys.executable, "-c", "from cartulary.validator import main; main()", *args],
+        capture_output=True, text=True,
+    )
+
+
+def test_changed_nonmatching_path_diagnostic_on_stderr_in_json_mode(tmp_path):
+    import json
+
+    # alice/bob one-sided reciprocal: the *unscoped* corpus has a real
+    # (warning-severity) finding. Scoping to a --changed path that matches
+    # nothing legitimately narrows the blast radius to nothing too, so stdout
+    # is correctly "[]" — byte-identical to a genuinely clean corpus. That
+    # ambiguity is exactly the bug: the only way to tell them apart must now
+    # be the stderr diagnostic.
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+    bogus = str(tmp_path / "no-such-file.md")
+
+    # Sanity check: the unscoped corpus does have a finding.
+    unscoped = _run_cli(sp, alice, bob, "--json")
+    assert json.loads(unscoped.stdout), "corpus should have a real finding pre-scoping"
+
+    proc = _run_cli(sp, alice, bob, "--json", "--changed", bogus)
+
+    # stdout stays findings-only, valid, machine-parseable JSON (still "[]").
+    payload = json.loads(proc.stdout)
+    assert payload == []
+    assert "NOTE" not in proc.stdout and "not in the validated set" not in proc.stdout
+
+    # stderr names the ignored path.
+    assert bogus in proc.stderr
+    assert "not in the validated set" in proc.stderr
+
+    # Exit code is unaffected by the non-matching --changed path (unchanged
+    # from today's behavior: an empty scoped result exits 0).
+    assert proc.returncode == 0
+
+
+def test_changed_matching_path_has_no_ignored_path_diagnostic(tmp_path):
+    import json
+
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+
+    proc = _run_cli(sp, alice, bob, "--json", "--changed", alice)
+
+    payload = json.loads(proc.stdout)
+    assert payload
+    assert proc.stderr == ""
+    assert proc.returncode == 0
+
+
+def test_changed_nonmatching_path_diagnostic_on_stderr_in_sarif_mode(tmp_path):
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+    bogus = str(tmp_path / "no-such-file.md")
+
+    proc = _run_cli(sp, alice, bob, "--sarif", "--changed", bogus)
+
+    assert proc.stdout.strip().startswith("{")  # still valid-looking SARIF, not a NOTE line
+    assert bogus in proc.stderr
+    assert proc.returncode == 0
+
+
+def test_changed_nonmatching_path_diagnostic_on_stderr_in_human_mode(tmp_path):
+    sp = _kin_schema(tmp_path)
+    alice = _person(tmp_path, "alice", parents_ref="bob")
+    bob = _person(tmp_path, "bob")
+    bogus = str(tmp_path / "no-such-file.md")
+
+    proc = _run_cli(sp, alice, bob, "--changed", bogus)
+
+    # The diagnostic moves to stderr even in human mode; stdout keeps the report.
+    assert bogus in proc.stderr
+    assert "not in the validated set" in proc.stderr
+    assert bogus not in proc.stdout
 
 
 # ── finding rule ids (taxonomy) & SARIF output ───────────────
