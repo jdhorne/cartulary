@@ -1081,6 +1081,24 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
     Pass 3: check inverse ref reciprocity.
     """
     _require_valid_schema(schema_path)
+
+    # De-duplicate by resolved path, preserving first-seen order — mirroring
+    # the CLI's _expand_paths. Without this, a caller that (plausibly) repeats
+    # a path — e.g. combining `git diff` output with a directory walk — would
+    # have that file self-collide against a bogus "Duplicate primary key ...
+    # (also in: )" with an empty also-in list, since the only "other" file is
+    # itself (Adjudicator-found B). The CLI never hits this because
+    # _expand_paths already dedupes; validate_files is the documented library
+    # entry point and must agree.
+    seen: set[str] = set()
+    deduped_filepaths: list[str] = []
+    for fp in filepaths:
+        key = str(Path(fp).resolve())
+        if key not in seen:
+            seen.add(key)
+            deduped_filepaths.append(fp)
+    filepaths = deduped_filepaths
+
     loaded = load_schema(schema_path)
     multi = loaded.get("_multi", False)
     if multi:

@@ -199,6 +199,27 @@ def test_duplicate_primary_key_reported(tmp_path):
     assert dupes
 
 
+def test_validate_files_dedupes_the_same_path_passed_twice(tmp_path):
+    # A caller passing the same path twice (e.g. `git diff` output plus a
+    # directory walk) must not self-collide against a bogus "Duplicate
+    # primary key ... (also in: )" with an empty also-in list — the only
+    # "other" file is itself (Adjudicator-found B). The CLI is already
+    # guarded by _expand_paths' resolve-based dedupe; validate_files must
+    # agree so the library entry point behaves the same way.
+    schema = {
+        "primary_key": "id",
+        "frontmatter": {"fields": {"id": {"required": True, "primary_key": True}}},
+        "sections": [],
+        "additional_sections": True,
+    }
+    sp = dump_schema(tmp_path, "s.yaml", schema)
+    f = write(tmp_path, "a.md", "---\nid: refr\n---\n")
+    once = validate_files(sp, [f])
+    twice = validate_files(sp, [f, f])
+    assert twice == once
+    assert not any("Duplicate primary key" in e.message for e in twice[f])
+
+
 # ── filename_must_match & file existence ─────────────────────
 
 def test_filename_must_match(tmp_path):
