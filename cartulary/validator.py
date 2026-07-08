@@ -501,7 +501,14 @@ class SchemaValidator:
 
         for name, defn in fields.items():
             value = fm.get(name)
-            if defn.get("required") and (value is None or value == ""):
+            # A primary_key field is implicitly required: a document with no
+            # usable identity (missing, null, or empty-string PK) is invalid
+            # on its own, regardless of whether the schema author also wrote
+            # `required: true` on it. This is a single OR'd condition (not a
+            # second check) so a field that is both `primary_key: true` and
+            # `required: true` still yields exactly one finding.
+            implicitly_required = name == self._pk_field
+            if (defn.get("required") or implicitly_required) and (value is None or value == ""):
                 self._error(f"frontmatter.{name}", f"Required field '{name}' is missing",
                             rule="required-field")
                 continue

@@ -20,6 +20,142 @@
       path: "frontmatter.birth"
       severity: error
 
+- name: primary-key-implicitly-required-empty-string
+  description: >
+    A primary_key field is implicitly required even when the schema never
+    marks it `required: true`: an empty-string value is reported as
+    required-field, once per document. Two documents sharing the same blank
+    key are NOT a duplicate-key collision — an absent identity is not a
+    shared identity.
+  schema: implicit-pk.yaml
+  documents:
+    - path: blank1.md
+      content: |
+        ---
+        person_id: ""
+        ---
+        # Blank One
+
+        ## Relations
+    - path: blank2.md
+      content: |
+        ---
+        person_id: ""
+        ---
+        # Blank Two
+
+        ## Relations
+  expect:
+    - file: blank1.md
+      path: "frontmatter.person_id"
+      severity: error
+      message_contains: "person_id"
+    - file: blank2.md
+      path: "frontmatter.person_id"
+      severity: error
+      message_contains: "person_id"
+
+- name: primary-key-implicitly-required-null
+  description: >
+    Same as the empty-string case, but the primary key is YAML `null`
+    (equivalent to the field being present with no value).
+  schema: implicit-pk.yaml
+  documents:
+    - path: null1.md
+      content: |
+        ---
+        person_id: null
+        ---
+        # Null One
+
+        ## Relations
+    - path: null2.md
+      content: |
+        ---
+        person_id: null
+        ---
+        # Null Two
+
+        ## Relations
+  expect:
+    - file: null1.md
+      path: "frontmatter.person_id"
+      severity: error
+      message_contains: "person_id"
+    - file: null2.md
+      path: "frontmatter.person_id"
+      severity: error
+      message_contains: "person_id"
+
+- name: primary-key-implicitly-required-absent
+  description: >
+    The primary key field is implicitly required even when it is entirely
+    absent from frontmatter (not merely blank).
+  schema: implicit-pk.yaml
+  documents:
+    - path: missing.md
+      content: |
+        ---
+        title: No key at all
+        ---
+        # Missing
+
+        ## Relations
+  expect:
+    - file: missing.md
+      path: "frontmatter.person_id"
+      severity: error
+      message_contains: "person_id"
+
+- name: primary-key-falsy-zero-is-valid
+  description: >
+    A primary_key value of YAML integer 0 coerces to the string "0" and is a
+    legitimate, usable key: it must NOT trigger required-field, and other
+    documents reference it normally (including satisfying reciprocity).
+  schema: implicit-pk.yaml
+  documents:
+    - path: zero.md
+      content: |
+        ---
+        person_id: 0
+        ---
+        # Zero
+
+        ## Relations
+
+        - Ref → `1`
+    - path: one.md
+      content: |
+        ---
+        person_id: 1
+        ---
+        # One
+
+        ## Relations
+
+        - Ref → `0`
+  expect: []
+
+- name: primary-key-required-field-not-double-reported
+  description: >
+    When a primary_key field is ALSO explicitly `required: true` in the
+    schema (the house style for most schemas in this suite), a blank value
+    produces exactly one required-field finding, not two.
+  schema: person-relations.yaml
+  documents:
+    - path: blank.md
+      content: |
+        ---
+        person_id: ""
+        ---
+        # Blank
+
+        ## Relations
+  expect:
+    - file: blank.md
+      path: "frontmatter.person_id"
+      severity: error
+
 - name: type-pattern-rejected
   description: A field value that does not match its value_type pattern is reported.
   schema: family-tree.yaml

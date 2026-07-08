@@ -1,0 +1,20 @@
+# implicit-pk.yaml — a primary_key field with NO explicit `required: true`.
+#
+# Exercises the rule that `primary_key` alone makes a field implicitly
+# required: a document whose primary key is absent, null, or empty must be
+# reported (required-field) even though this schema never marks the field
+# `required`. See cases/frontmatter.yaml.
+
+document: person
+primary_key: person_id
+frontmatter:
+  fields:
+    person_id:
+      primary_key: true
+sections:
+  - heading: Relations
+    content:
+      type: ref_list
+      style: unlabeled
+      ref: person
+      inverse: Relations

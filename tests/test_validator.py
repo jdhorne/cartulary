@@ -220,6 +220,100 @@ def test_validate_files_dedupes_the_same_path_passed_twice(tmp_path):
     assert not any("Duplicate primary key" in e.message for e in twice[f])
 
 
+# ── primary_key implies required (SPEC-GAP #4) ───────────────
+#
+# The portable behaviour (exact finding sets) is pinned in
+# conformance/cases/frontmatter.yaml (implicit-pk.yaml schema). These tests
+# cover the implementation-specific angles: that the rule applies in
+# single-file mode too (not just validate_files), and the internal
+# bookkeeping (known_ids / duplicate_ids / ref_index) that keeps a blank-key
+# document out of the reference graph.
+
+def _implicit_pk_schema(tmp_path: Path) -> str:
+    # Deliberately does NOT set `required: true` on person_id — only
+    # `primary_key: true` — so these tests prove the requirement is implied,
+    # not inherited from an explicit `required`.
+    schema = {
+        "document": "person",
+        "primary_key": "person_id",
+        "frontmatter": {"fields": {"person_id": {"primary_key": True}}},
+        "sections": [{
+            "heading": "Relations",
+            "content": {"type": "ref_list", "style": "unlabeled",
+                        "ref": "person", "inverse": "Relations"},
+        }],
+    }
+    return dump_schema(tmp_path, "s.yaml", schema)
+
+
+@pytest.mark.parametrize("pk_frontmatter", ['person_id: ""', "person_id: null", "title: no key"])
+def test_primary_key_implicitly_required_in_single_file_mode(tmp_path, pk_frontmatter):
+    # validate_file has no cross-document machinery at all — this proves the
+    # required-field check lives in per-file frontmatter validation, not
+    # bolted onto validate_files' corpus bookkeeping.
+    sp = _implicit_pk_schema(tmp_path)
+    fp = write(tmp_path, "blank.md", f"---\n{pk_frontmatter}\n---\n\n# Blank\n\n## Relations\n")
+    errors = validate_file(sp, fp)
+    findings = [e for e in errors if e.rule == "required-field"]
+    assert len(findings) == 1
+    assert findings[0].path == "frontmatter.person_id"
+
+
+def test_blank_primary_keys_are_not_a_duplicate_key_collision(tmp_path):
+    sp = _implicit_pk_schema(tmp_path)
+    a = write(tmp_path, "a.md", '---\nperson_id: ""\n---\n\n# A\n\n## Relations\n')
+    b = write(tmp_path, "b.md", '---\nperson_id: ""\n---\n\n# B\n\n## Relations\n')
+    results = validate_files(sp, [a, b])
+    all_errors = [e for errs in results.values() for e in errs]
+    assert not any(e.rule == "duplicate-key" for e in all_errors)
+    # Exactly one required-field error per document, nothing else.
+    assert [e.rule for e in results[a]] == ["required-field"]
+    assert [e.rule for e in results[b]] == ["required-field"]
+
+
+def test_null_primary_keys_are_not_a_duplicate_key_collision(tmp_path):
+    sp = _implicit_pk_schema(tmp_path)
+    a = write(tmp_path, "a.md", "---\nperson_id: null\n---\n\n# A\n\n## Relations\n")
+    b = write(tmp_path, "b.md", "---\nperson_id: null\n---\n\n# B\n\n## Relations\n")
+    results = validate_files(sp, [a, b])
+    all_errors = [e for errs in results.values() for e in errs]
+    assert not any(e.rule == "duplicate-key" for e in all_errors)
+
+
+def test_blank_primary_key_document_does_not_join_the_reference_graph(tmp_path):
+    # A document with no identity can't be referenced (there's no id to
+    # write a `` `ref` `` to) and no reciprocity is expected of it. Confirm
+    # a third, normal document referencing a *real* id is unaffected by the
+    # blank-key documents sitting in the same corpus — no missing-reciprocal
+    # or other cross-doc noise is attributed to them.
+    sp = _implicit_pk_schema(tmp_path)
+    blank1 = write(tmp_path, "blank1.md", '---\nperson_id: ""\n---\n\n# Blank One\n\n## Relations\n')
+    blank2 = write(tmp_path, "blank2.md", '---\nperson_id: ""\n---\n\n# Blank Two\n\n## Relations\n')
+    alice = write(tmp_path, "alice.md",
+                  "---\nperson_id: alice\n---\n\n# Alice\n\n## Relations\n\n- Bob → `bob`\n")
+    bob = write(tmp_path, "bob.md",
+                "---\nperson_id: bob\n---\n\n# Bob\n\n## Relations\n\n- Alice → `alice`\n")
+    results = validate_files(sp, [blank1, blank2, alice, bob])
+    assert [e.rule for e in results[blank1]] == ["required-field"]
+    assert [e.rule for e in results[blank2]] == ["required-field"]
+    assert results[alice] == []
+    assert results[bob] == []
+
+
+def test_falsy_zero_primary_key_stays_valid_and_resolves(tmp_path):
+    # person_id: 0 (YAML int) is stringified to "0" by split_frontmatter
+    # before the required-field / `if pk:` checks ever see it — it must NOT
+    # be treated like an empty/null key.
+    sp = _implicit_pk_schema(tmp_path)
+    zero = write(tmp_path, "zero.md",
+                 "---\nperson_id: 0\n---\n\n# Zero\n\n## Relations\n\n- Ref → `1`\n")
+    one = write(tmp_path, "one.md",
+                "---\nperson_id: 1\n---\n\n# One\n\n## Relations\n\n- Ref → `0`\n")
+    results = validate_files(sp, [zero, one])
+    assert results[zero] == []
+    assert results[one] == []
+
+
 # ── filename_must_match & file existence ─────────────────────
 
 def test_filename_must_match(tmp_path):
