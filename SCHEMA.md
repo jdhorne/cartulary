@@ -266,6 +266,12 @@ The cross-reference is the back-ticked id after a `→` arrow. The literals
 and the set of "no reference" literals are configurable — see
 [Conventions](#conventions).
 
+In an **unlabeled** list, an item that is neither a recognized cross-reference
+nor one of the "no reference" literals — e.g. one with a mistyped or missing
+arrow — is reported as a warning (`ref-missing`, path
+`section[<Heading>].item`), the unlabeled analogue of a labeled slot with
+`allow_unknown: false`. Such an item still counts toward `min_items`/`max_items`.
+
 ### `log`
 
 A bullet list whose every item must match a regex:
@@ -295,14 +301,47 @@ This is what distinguishes cartulary from frontmatter/structure validators:
   accepted. Targeting a **document type** is always unambiguous, even when two
   types share a PK field name. The legacy PK-field form infers the type from
   the field's owner(s); if several types share that field name it degrades to
-  "any of them", so prefer the document-type form in that case.
+  "any of them", so prefer the document-type form in that case. This "any of
+  them" degradation applies to **format-checking** as well: a legacy
+  `ref: <field-name>` value is accepted if it matches **any** owning type's
+  primary-key format, and flagged (naming the union of allowed types) only if it
+  matches none of them.
 - A `ref:` is also **format-validated** against the target PK's type, so a
   malformed id is caught even before resolution.
 - `inverse: <section>` declares a **reciprocal** expectation: if document A's
-  section lists B, then B's named `inverse` section must list A. Missing
-  reciprocals are reported as warnings. This works in both directions and
-  across document types (since all PKs share one namespace).
-- **Duplicate primary keys** across the corpus are reported.
+  section lists B, then B's named `inverse` section must list A. This is
+  satisfied only by the target's own `inverse` section — never by a frontmatter
+  field, even one that happens to share the section's name (e.g. a section
+  literally named `_frontmatter`). Missing reciprocals are reported as warnings.
+  This works in both directions and across document types (since all PKs share
+  one namespace). At most **one** `missing-reciprocal` finding is produced per
+  (source document, target document, inverse section) triple, no matter how many
+  items in the source's section mention the same target.
+- A **primary-key field is implicitly required**: a document whose primary-key
+  value is missing, `null`, or empty is reported (error, `required-field`, path
+  `frontmatter.<field>`) and does not participate in the reference graph —
+  nothing can reference it and no reciprocity is expected of it (its own refs
+  are still format-checked and resolved). Two documents that both lack a key are
+  **not** a `duplicate-key` collision; the error is the missing identity itself,
+  reported once per document. Keys are compared after string coercion, so a
+  scalar like `0` is a valid key (only missing/`null`/empty triggers the error).
+- **Identifier equality** — for primary-key uniqueness, reference resolution,
+  and reciprocity — is exact Unicode **code-point** equality of the string
+  values: no case folding and no Unicode normalization (NFC/NFD), even where the
+  host language's native string comparison would apply it. Keep a corpus in one
+  normalization form (NFC recommended).
+- **Duplicate primary keys** across the corpus are reported (error,
+  `duplicate-key`, one finding per colliding document). A duplicated key is an
+  invalid-corpus condition: the id no longer identifies a document, so it is
+  **never used as a resolution target**. A reference whose value equals a
+  duplicated key is reported as `ambiguous-reference` (error) at the referring
+  location — not `unresolved-reference` (the id does exist) and not resolved
+  against any one of the colliding documents — and no `reference-type` or
+  reciprocity conclusion is drawn from it. Documents whose key is duplicated
+  participate in no reciprocity checking, as source or target.
+
+The complete set of findings for a corpus is a **pure function of the set of
+documents** — it never depends on the order in which they are supplied.
 
 Single-file validation (`validate_file`) skips resolution and reciprocity
 (there is no corpus to resolve against) but still does format-validation and

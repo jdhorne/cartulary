@@ -139,7 +139,9 @@ for err in errors:
 ```
 
 The CLI prints a per-file report and exits non-zero if any **error**
-(as opposed to warning) is found.
+(as opposed to warning) is found. `validate_files` de-duplicates repeated paths
+(by resolved path, first-seen order preserved), so passing the same file twice
+is equivalent to passing it once.
 
 ---
 
@@ -223,15 +225,18 @@ dangling half of the relationship that a frontmatter or link checker can't:
   cardinality), and `log` (regex per entry).
 - **Cross-document**: reference resolution (refs must resolve **and** point at
   the right document *type*), reciprocal (`inverse`) checks,
-  duplicate-primary-key detection, and multi-schema routing by
-  `document_type` over a shared key namespace.
+  duplicate-primary-key detection (a duplicated key is ambiguous — refs to it
+  are flagged, never silently resolved to one side), and multi-schema routing by
+  `document_type` over a shared key namespace. Findings are a function of the
+  set of documents, not the order they're passed.
 - **Blast-radius scoping** (`--changed`): validate the whole corpus but report
   only the findings a set of changed files is responsible for — ideal for
   gating a PR (see below).
 - **Output for CI & editors**: a per-file human report, `--json`, or `--sarif`
   (SARIF 2.1.0 — GitHub code scanning renders findings inline on the PR diff).
   Every finding carries a stable `rule` id (e.g. `unresolved-reference`,
-  `missing-reciprocal`) so its identity survives message-wording changes.
+  `missing-reciprocal`, `ambiguous-reference`) so its identity survives
+  message-wording changes.
 - Every finding is an `error` or `warning`; many rules let you pick.
 
 ---
@@ -267,6 +272,13 @@ The whole corpus is still validated; `--changed` only scopes the **output** and
 the **exit status**, so a repo with pre-existing findings elsewhere won't fail a
 PR that didn't touch them. Each finding's blast radius is also exposed as
 `caused_by` in `--json` output (and on `ValidationError`) for editor/CI use.
+
+A `--changed` path that doesn't resolve to any validated file is ignored for
+scoping — routine, since deletions and renames show up in `git diff
+--name-only`. The CLI notes each ignored path on **stderr** in every mode
+(human, `--json`, `--sarif`); stdout stays findings-only, and ignored paths
+never change the findings or the exit status. So an all-stale `--changed`
+argument is visible in the logs instead of masquerading as a clean run.
 
 ---
 
