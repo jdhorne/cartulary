@@ -187,3 +187,32 @@
         message_contains: "Duplicate primary key" }
     - { file: review1.md, path: frontmatter.subject, severity: error,
         message_contains: "ambiguous" }
+
+- name: duplicate-key-namespace-spans-distinct-pk-field-names
+  description: >
+    Primary-key uniqueness is one flat namespace across the whole corpus,
+    scoped by neither document type nor PK field name: an `author` (pk
+    field author_id) and a `book` (pk field book_id) whose id VALUES
+    coincide both get a duplicate-key error, even though the two types
+    don't even share a PK field name.
+  schema: distinct-pk-fields.yaml
+  documents:
+    - path: author_x1.md
+      content: |
+        ---
+        document_type: author
+        author_id: x1
+        ---
+        # Author X1
+    - path: book_x1.md
+      content: |
+        ---
+        document_type: book
+        book_id: x1
+        ---
+        # Book X1
+  expect:
+    - { file: author_x1.md, path: frontmatter.author_id, severity: error,
+        message_contains: "Duplicate primary key" }
+    - { file: book_x1.md, path: frontmatter.book_id, severity: error,
+        message_contains: "Duplicate primary key" }

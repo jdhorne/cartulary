@@ -1,0 +1,19 @@
+# distinct-pk-fields.yaml — two document types with DIFFERENT primary-key
+# field names (author_id, book_id) that otherwise have nothing in common.
+# Used to pin that primary-key uniqueness is a single flat namespace across
+# the whole corpus — scoped by neither document type nor PK field name — so
+# a coincidentally-equal id value across two unrelated types is still a
+# duplicate-key collision. See cases/duplicates.yaml.
+
+schemas:
+  author:
+    frontmatter:
+      fields:
+        document_type: { value: author, required: true }
+        author_id: { primary_key: true, required: true }
+
+  book:
+    frontmatter:
+      fields:
+        document_type: { value: book, required: true }
+        book_id: { primary_key: true, required: true }

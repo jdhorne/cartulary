@@ -400,6 +400,42 @@
       severity: error
       message_contains: "At most 2"
 
+- name: ref-list-max-items-does-not-truncate-resolution
+  description: >
+    Hitting max_items does not stop reference resolution from running over
+    every item: an item beyond the cap that holds a dangling reference is
+    still resolved and reported unresolved, alongside the cardinality error
+    for the list as a whole.
+  schema: structure.yaml
+  documents:
+    - path: rec-card.md
+      content: |
+        ---
+        id: rec-card
+        code: "1"
+        ---
+
+        # Record 1
+
+        ## Body
+
+        Three references where at most two are allowed; the third is dangling.
+
+        ## Refs
+
+        - one → `rec-card`
+        - two → `rec-card`
+        - three → `ghost-id`
+  expect:
+    - file: rec-card.md
+      path: "section[Refs]"
+      severity: error
+      message_contains: "At most 2"
+    - file: rec-card.md
+      path: "section[Refs].item"
+      severity: error
+      message_contains: "Unresolved reference"
+
 - name: ref-targets-document-type-wrong
   description: A ref naming a document type rejects a resolved id of another type, even when PK field names collide.
   schema: shared-pk.yaml

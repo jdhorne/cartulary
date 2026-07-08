@@ -264,6 +264,25 @@
       severity: warning
       message_contains: "Missing reciprocal"
 
+- name: self-reference-satisfies-own-inverse
+  description: >
+    A document that lists ITSELF in a section carrying inverse: (source id
+    == target id) is treated as fully reciprocated — the back-link
+    genuinely exists, trivially, by itself. No findings.
+  schema: person-relations.yaml
+  documents:
+    - path: alice.md
+      content: |
+        ---
+        person_id: alice
+        ---
+        # Alice
+
+        ## Relations
+
+        - Alice → `alice`
+  expect: []
+
 - name: unknown-document-type
   description: In a multi-schema file, a document_type with no matching schema is reported.
   schema: library.yaml
