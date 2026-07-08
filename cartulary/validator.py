@@ -307,7 +307,7 @@ class SchemaValidator:
 
     def __init__(self, schema: dict, known_ids: set[str] | None = None,
                  known_id_types: dict[str, str] | None = None,
-                 ref_targets: dict[str, tuple[set[str], dict]] | None = None,
+                 ref_targets: dict[str, tuple[set[str], list[dict]]] | None = None,
                  ambiguous_ids: dict[str, set[str]] | None = None):
         self.schema = schema
         self.value_types = schema.get("value_types", {})
@@ -320,10 +320,11 @@ class SchemaValidator:
         self.known_ids = known_ids
         # Cross-document type awareness. ref_targets maps each valid `ref:` value
         # — a document type name, or (legacy) a PK field name — to the set of
-        # document types it may resolve to and the PK type definition used to
-        # format-check it. Targeting a document type stays precise even when two
-        # types share a PK field name; targeting a shared field name degrades to
-        # "any owner of that field".
+        # document types it may resolve to and every one of those types' PK type
+        # definitions, used to format-check it. Targeting a document type stays
+        # precise even when two types share a PK field name; targeting a shared
+        # field name degrades to "any owner of that field" — for format-checking
+        # too, so a value valid for any one owner's PK type is accepted.
         self.known_id_types = known_id_types or {}
         self.ref_targets = ref_targets or {}
         # A duplicated primary key is an invalid-corpus condition: the id no
@@ -400,12 +401,30 @@ class SchemaValidator:
         """Record a ref for cross-document resolution checking.
 
         If *ref_target* is a known target (a document type or PK field name),
-        validate the ref value against that target's PK type definition.
+        validate the ref value against that target's PK type definition(s). A
+        legacy (PK-field-name) target can have several owners — document types
+        that happen to share the field name — with *different* PK formats; the
+        documented "degrades to any of them" resolution semantics must also
+        hold for format-checking, so the value is accepted if it matches ANY
+        owner's PK type, and rejected (naming the union) only if it matches
+        none.
         """
         self.refs_found.append((path, ref, ref_target))
         target = self.ref_targets.get(ref_target) if ref_target else None
-        if target and target[1]:
-            self._check_value(ref, target[1], path)
+        if not target:
+            return
+        defns = [d for d in target[1] if d]
+        if not defns:
+            return
+        if len(defns) == 1:
+            self._check_value(ref, defns[0], path)
+            return
+        if any(self._value_passes(ref, d) for d in defns):
+            return
+        type_names = list(dict.fromkeys(d.get("type") for d in defns if d.get("type")))
+        union = " or ".join(type_names) if type_names else "any owner"
+        self._error(path, f"'{ref}' doesn't match any owner's type for '{ref_target}' ({union})",
+                    rule="type-mismatch")
 
     def _id_pattern_for(self, ref_target: str | None) -> str | None:
         """The (anchor-stripped) regex an id of *ref_target*'s primary key is
@@ -416,12 +435,15 @@ class SchemaValidator:
         hard-coded one. Prefers the cross-document ``ref_targets`` table (precise
         when ``ref:`` names a document type), and falls back to *this* schema's
         primary key — which is what the table holds in single-file validation,
-        where it is not populated.
+        where it is not populated. When a legacy target has multiple owners,
+        an arbitrary owner's pattern is used for this best-effort recovery
+        heuristic (unlike format-checking, this is not the correctness-
+        critical path — see _collect_ref for the any-of check).
         """
         pk_defn = None
         target = self.ref_targets.get(ref_target) if ref_target else None
-        if target:
-            pk_defn = target[1]
+        if target and target[1]:
+            pk_defn = target[1][0]
         elif self._pk_defn:
             pk_defn = self._pk_defn
         if not pk_defn:
@@ -1071,13 +1093,18 @@ def validate_files(schema_path: str, filepaths: list[str]) -> dict[str, list[Val
     # Build the PK field per schema and the ref-target table. A `ref:` value may
     # name a document type (precise) or a PK field name (legacy; degrades to
     # "any type owning that field" when several share it). ref_targets maps each
-    # such name to (allowed document types, PK type definition for formatting).
+    # such name to (allowed document types, every one of those types' PK type
+    # definitions) — a legacy target can have several owners with *different*
+    # PK formats, and format-checking must accept a value valid for any owner,
+    # not just whichever one happened to register first.
     pk_fields: dict[str, str | None] = {}
-    ref_targets: dict[str, tuple[set[str], dict]] = {}
+    ref_targets: dict[str, tuple[set[str], list[dict]]] = {}
 
     def _register_target(name: str, doc_type: str, defn: dict):
-        owners, _ = ref_targets.setdefault(name, (set(), defn))
+        owners, defns = ref_targets.setdefault(name, (set(), []))
         owners.add(doc_type)
+        if defn not in defns:
+            defns.append(defn)
 
     for doc_type, schema in schemas.items():
         pk_name = _resolve_pk_field(schema)

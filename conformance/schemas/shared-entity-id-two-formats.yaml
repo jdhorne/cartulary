@@ -1,0 +1,28 @@
+# shared-entity-id-two-formats.yaml — author and publisher share the PK
+# field name entity_id but use DIFFERENT id formats. Pins that a legacy
+# `ref: entity_id` format-checks against the union of every owner's PK
+# type, not just whichever owner happens to register first.
+
+value_types:
+  author_fmt: { pattern: "^a-\\d+$" }
+  pub_fmt: { pattern: "^p-\\d+$" }
+
+schemas:
+  author:
+    frontmatter:
+      fields:
+        document_type: { value: author, required: true }
+        entity_id: { primary_key: true, required: true, type: author_fmt }
+
+  publisher:
+    frontmatter:
+      fields:
+        document_type: { value: publisher, required: true }
+        entity_id: { primary_key: true, required: true, type: pub_fmt }
+
+  book:
+    frontmatter:
+      fields:
+        document_type: { value: book, required: true }
+        book_id: { primary_key: true, required: true }
+        some_ref: { ref: entity_id }

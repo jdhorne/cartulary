@@ -616,6 +616,60 @@ def test_ref_targets_document_type_correct_is_clean(tmp_path):
                    for e in results[w]), [f"{e.path}: {e.message}" for e in results[w]]
 
 
+# ── legacy `ref: <pk-field>` format-checks against ALL owners, not just the
+# first-registered one (Adjudicator-found A) ─────────────────────────────
+
+def _shared_entity_id_two_formats_schema():
+    """author & publisher both use PK field `entity_id`, with DIFFERENT formats."""
+    return {
+        "value_types": {
+            "author_fmt": {"pattern": "^a-\\d+$"},
+            "pub_fmt": {"pattern": "^p-\\d+$"},
+        },
+        "schemas": {
+            "author": {"frontmatter": {"fields": {
+                "document_type": {"value": "author", "required": True},
+                "entity_id": {"primary_key": True, "required": True, "type": "author_fmt"},
+            }}},
+            "publisher": {"frontmatter": {"fields": {
+                "document_type": {"value": "publisher", "required": True},
+                "entity_id": {"primary_key": True, "required": True, "type": "pub_fmt"},
+            }}},
+            "book": {"frontmatter": {"fields": {
+                "document_type": {"value": "book", "required": True},
+                "book_id": {"primary_key": True, "required": True},
+                "some_ref": {"ref": "entity_id"},
+            }}},
+        },
+    }
+
+
+def test_legacy_shared_field_ref_accepts_either_owner_format(tmp_path):
+    sp = dump_schema(tmp_path, "s.yaml", _shared_entity_id_two_formats_schema())
+    a = write(tmp_path, "a1.md", "---\ndocument_type: author\nentity_id: a-1\n---\n\n# A1\n")
+    p = write(tmp_path, "p1.md", "---\ndocument_type: publisher\nentity_id: p-1\n---\n\n# P1\n")
+    b = write(tmp_path, "b1.md",
+              "---\ndocument_type: book\nbook_id: b1\nsome_ref: p-1\n---\n\n# B1\n")
+    results = validate_files(sp, [a, p, b])
+    # p-1 is a valid publisher id; the legacy ref must accept it even though
+    # `author` is very likely registered first (schema-map iteration order).
+    assert results[b] == [], [f"[{e.path}] {e.message}" for e in results[b]]
+
+
+def test_legacy_shared_field_ref_rejects_value_matching_no_owner(tmp_path):
+    sp = dump_schema(tmp_path, "s.yaml", _shared_entity_id_two_formats_schema())
+    a = write(tmp_path, "a1.md", "---\ndocument_type: author\nentity_id: a-1\n---\n\n# A1\n")
+    p = write(tmp_path, "p1.md", "---\ndocument_type: publisher\nentity_id: p-1\n---\n\n# P1\n")
+    b = write(tmp_path, "b1.md",
+              "---\ndocument_type: book\nbook_id: b1\nsome_ref: zzz-9\n---\n\n# B1\n")
+    results = validate_files(sp, [a, p, b])
+    bad = [e for e in results[b] if e.path == "frontmatter.some_ref"]
+    assert bad, [f"[{e.path}] {e.message}" for e in results[b]]
+    assert bad[0].rule == "type-mismatch"
+    # The message should name the union of allowed types, not just one owner's.
+    assert "author_fmt" in bad[0].message and "pub_fmt" in bad[0].message
+
+
 # ── reference-list cardinality (max_items) ───────────────────
 
 def test_ref_list_max_items_enforced():

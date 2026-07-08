@@ -398,3 +398,38 @@
 
         # w2
   expect: []
+
+- name: legacy-shared-field-ref-accepts-any-owner-format
+  description: >
+    A legacy ref naming a PK field owned by two types with different id
+    formats accepts a value valid for either owner (here a valid publisher
+    id), instead of format-checking against only whichever owner happened
+    to register first.
+  schema: shared-entity-id-two-formats.yaml
+  documents:
+    - path: a1.md
+      content: |
+        ---
+        document_type: author
+        entity_id: a-1
+        ---
+
+        # A1
+    - path: p1.md
+      content: |
+        ---
+        document_type: publisher
+        entity_id: p-1
+        ---
+
+        # P1
+    - path: b1.md
+      content: |
+        ---
+        document_type: book
+        book_id: b1
+        some_ref: p-1
+        ---
+
+        # B1
+  expect: []
