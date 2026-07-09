@@ -289,7 +289,7 @@ argument is visible in the logs instead of masquerading as a clean run.
 ```yaml
 repos:
   - repo: https://github.com/jdhorne/cartulary
-    rev: v0.2.0
+    rev: v0.3.0
     hooks:
       - id: cartulary
         args: [schema.yaml, docs/]   # your schema, then the corpus path(s)
@@ -311,7 +311,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdhorne/cartulary@v0.2.0
+      - uses: jdhorne/cartulary@v0.3.0
         with:
           schema: schema.yaml
           files: docs/
